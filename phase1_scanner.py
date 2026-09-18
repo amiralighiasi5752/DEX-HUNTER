@@ -22,7 +22,7 @@ class Breakout20(Strategy):
         if self.position and self.data.Close[-1] < self.data.Close[-self.lookback]:
             self.position.close()
 
-if name == 'main':
+if __name__ == '__main__':
     df = fetch_data('BTC/USDT', '1d', 2000)
     print(f"داده دریافت شد: {len(df)} کندل از {df.index[0]} تا {df.index[-1]}")
     bt = Backtest(df, Breakout20, cash=10000, commission=0.001)
