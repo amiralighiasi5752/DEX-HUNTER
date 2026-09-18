@@ -1,63 +1,43 @@
 import requests
 import pandas as pd
-import json
 
 def fetch_dexscreener_new_tokens(chain="solana"):
-    """
-    دریافت جدیدترین پروفایل توکن‌های تازه‌لیست‌شده در DEXScreener.
-    از endpoint عمومی token-profiles استفاده می‌کند که به API Key نیاز ندارد [citation:5][citation:10].
-    """
+    """دریافت جدیدترین توکن‌های تازه‌لیست‌شده در DEXScreener"""
     url = "https://api.dexscreener.com/token-profiles/latest/v1"
     response = requests.get(url)
     response.raise_for_status()
-    data = response.json()
-    
-    # استخراج توکن‌ها
-    tokens = []
-    for item in data:
-        tokens.append({
-            "chain": item.get("chainId", "?"),
-            "token_address": item.get("tokenAddress", "?"),
-            "url": item.get("url", "?")
-        })
-    
-    return pd.DataFrame(tokens)
+    return response.json()
 
-def filter_tokens_by_criteria(df, chain_filter="solana"):
-    """
-    فیلتر توکن‌ها بر اساس شبکه و معیارهای اولیه.
-    """
-    if df.empty:
-        return df
-    
-    # فیلتر بر اساس شبکه
-    if chain_filter:
-        df = df[df["chain"] == chain_filter]
-    
-    return df
-
-if __name__ == '__main__':
+def main():
+    print("=" * 60)
     print("🔄 در حال دریافت توکن‌های جدید از DEXScreener...")
+    print("=" * 60)
     
     try:
-        df = fetch_dexscreener_new_tokens(chain="solana")
-        print(f"✅ {len(df)} توکن جدید دریافت شد.")
+        data = fetch_dexscreener_new_tokens(chain="solana")
         
-        # فیلتر بر اساس شبکه سولانا
-        filtered = filter_tokens_by_criteria(df, chain_filter="solana")
-        print(f"🎯 {len(filtered)} توکن پس از فیلتر شبکه سولانا.")
+        print(f"\n✅ تعداد کل توکن‌های جدید: {len(data)}\n")
         
-        # ذخیره نتیجه
-        output_file = "new_tokens.txt"
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(f"تعداد کل توکن‌های جدید: {len(df)}\n")
-            f.write(f"تعداد پس از فیلتر: {len(filtered)}\n\n")
-            f.write(filtered.to_string())
+        # نمایش مستقیم در لاگ (بدون فایل)
+        print("-" * 60)
+        print("📊 لیست توکن‌های تازه‌لیست‌شده:")
+        print("-" * 60)
         
-        print(f"\n✅ لیست در {output_file} ذخیره شد.")
-        print("\n📊 ۵ توکن اول:")
-        print(filtered.head().to_string())
+        for i, item in enumerate(data[:20], 1):  # ۲۰ توکن اول
+            chain = item.get("chainId", "?")
+            address = item.get("tokenAddress", "?")
+            url = item.get("url", "?")
+            print(f"\n{i}. شبکه: {chain}")
+            print(f"   آدرس: {address}")
+            print(f"   لینک: {url}")
+        
+        print("\n" + "=" * 60)
+        print(f"✅ نمایش ۲۰ توکن اول از {len(data)} توکن موجود.")
+        print("=" * 60)
         
     except Exception as e:
         print(f"❌ خطا: {e}")
         raise
+
+if __name__ == '__main__':
+    main()
