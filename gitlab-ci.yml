@@ -1,14 +1,9 @@
-stages:
-  - run_scanner
-
-run_scanner_job:
-  stage: run_scanner
-  image: python:3.11
-  script:
-    - pip install -r requirements.txt
-    - python phase1_scanner.py
-  artifacts:
-    paths:
-      - result.txt
-      - result.html
-    expire_in: 1 week
+- name: Upload results
+  uses: actions/upload-artifact@v4
+  with:
+    name: scan-results
+    path: |
+      markets.txt
+      result.txt
+      result.html
+    if-no-files-found: ignore
