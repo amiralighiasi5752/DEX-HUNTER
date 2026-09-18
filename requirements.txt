@@ -1,3 +1,4 @@
-ccxt
+
+hyperliquid-python-sdk
+requests
 pandas
-backtesting
