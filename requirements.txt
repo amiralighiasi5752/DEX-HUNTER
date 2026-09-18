@@ -1,3 +1,2 @@
-geckoterminal-py
-pandas
 requests
+pandas
