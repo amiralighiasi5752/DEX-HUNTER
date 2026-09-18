@@ -1,4 +1,3 @@
-
-hyperliquid-python-sdk
-requests
+geckoterminal-py
 pandas
+requests
