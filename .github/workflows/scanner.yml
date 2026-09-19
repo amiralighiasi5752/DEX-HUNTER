@@ -42,3 +42,11 @@ jobs:
         with:
           path: history.json
           key: history-cache-${{ github.run_id }}
+
+      - name: Upload history artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: history-data
+          path: history.json
+          if-no-files-found: warn
