@@ -52,6 +52,101 @@ def get_token_details(token_address):
         return None
     return None
 
+def safe_float(v):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
+
+def calculate_score(t):
+    """محاسبه امتیاز ۰ تا ۱۰۰ برای هر توکن"""
+    score = 0
+    details = []
+    
+    # === ۱. نسبت حجم به لیکوییدیتی (۳۰ امتیاز) ===
+    if t["liquidity"] > 0:
+        ratio = t["volume_24h"] / t["liquidity"]
+        if ratio >= 10:
+            score += 30
+            details.append(f"حجم/لیک {ratio:.1f}x (۳۰)")
+        elif ratio >= 5:
+            score += 22
+            details.append(f"حجم/لیک {ratio:.1f}x (۲۲)")
+        elif ratio >= 3:
+            score += 15
+            details.append(f"حجم/لیک {ratio:.1f}x (۱۵)")
+        elif ratio >= 1:
+            score += 8
+            details.append(f"حجم/لیک {ratio:.1f}x (۸)")
+    
+    # === ۲. سن توکن (۲۵ امتیاز) ===
+    age = t["age_hours"]
+    if age < 6:
+        score += 25
+        details.append(f"سن {age:.1f}h (۲۵)")
+    elif age < 12:
+        score += 20
+        details.append(f"سن {age:.1f}h (۲۰)")
+    elif age < 24:
+        score += 15
+        details.append(f"سن {age:.1f}h (۱۵)")
+    elif age < 48:
+        score += 8
+        details.append(f"سن {age:.1f}h (۸)")
+    else:
+        score += 3
+        details.append(f"سن {age:.1f}h (۳)")
+    
+    # === ۳. لیکوییدیتی پایین (۲۰ امتیاز) ===
+    liq = t["liquidity"]
+    if liq < 30000:
+        score += 20
+        details.append(f"لیک ${liq:,.0f} (۲۰)")
+    elif liq < 60000:
+        score += 15
+        details.append(f"لیک ${liq:,.0f} (۱۵)")
+    elif liq < 150000:
+        score += 10
+        details.append(f"لیک ${liq:,.0f} (۱۰)")
+    elif liq < 500000:
+        score += 5
+        details.append(f"لیک ${liq:,.0f} (۵)")
+    
+    # === ۴. تغییر قیمت ۲۴ ساعته (۱۵ امتیاز) ===
+    change = t["price_change_24h"]
+    if change >= 200:
+        score += 15
+        details.append(f"تغییر {change:.0f}% (۱۵)")
+    elif change >= 100:
+        score += 12
+        details.append(f"تغییر {change:.0f}% (۱۲)")
+    elif change >= 50:
+        score += 8
+        details.append(f"تغییر {change:.0f}% (۸)")
+    elif change >= 20:
+        score += 5
+        details.append(f"تغییر {change:.0f}% (۵)")
+    elif change >= 0:
+        score += 2
+        details.append(f"تغییر {change:.0f}% (۲)")
+    
+    # === ۵. حجم ۲۴ ساعته (۱۰ امتیاز) ===
+    vol = t["volume_24h"]
+    if vol >= 500000:
+        score += 10
+        details.append(f"حجم ${vol:,.0f} (۱۰)")
+    elif vol >= 200000:
+        score += 7
+        details.append(f"حجم ${vol:,.0f} (۷)")
+    elif vol >= 100000:
+        score += 4
+        details.append(f"حجم ${vol:,.0f} (۴)")
+    else:
+        score += 2
+        details.append(f"حجم ${vol:,.0f} (۲)")
+    
+    return score, " | ".join(details)
+
 def apply_filters(t):
     if not t:
         return False
@@ -78,15 +173,9 @@ def save_history(h):
     with open("history.json", "w", encoding="utf-8") as f:
         json.dump(h, f, ensure_ascii=False, indent=2)
 
-def safe_float(v):
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        return 0.0
-
 def main():
     summary = []
-    summary.append("# 🎯 DEX Hunter - Phase 4")
+    summary.append("# 🎯 DEX Hunter - Phase 5")
     summary.append("")
     summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
@@ -110,6 +199,7 @@ def main():
             if addr:
                 d = get_token_details(addr)
                 if d:
+                    d["score"], d["score_details"] = calculate_score(d)
                     all_data.append(d)
             time.sleep(0.5)
         
@@ -118,21 +208,35 @@ def main():
         summary.append("")
         
         truly_new = [t for t in filtered if t["address"] not in known_addresses]
+        truly_new.sort(key=lambda x: x["score"], reverse=True)
         
         if truly_new:
-            summary.append("## 🚀 توکن‌های جدید کشف‌شده")
+            summary.append("## 🏆 توکن‌های جدید (مرتب بر اساس امتیاز)")
             summary.append("")
-            summary.append("| نماد | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
-            summary.append("|------|------|------------|---------|-----------|-----|------|")
-            for t in truly_new[:10]:
-                summary.append(f"| {t['symbol']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [مشاهده]({t['url']}) |")
+            summary.append("| رتبه | نماد | امتیاز | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
+            summary.append("|------|------|--------|------|------------|---------|-----------|-----|------|")
+            for i, t in enumerate(truly_new[:10], 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}"
+                summary.append(f"| {medal} | **{t['symbol']}** | **{t['score']}/100** | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [نمودار]({t['url']}) |")
             
-            telegram.append(f"🚀 *{len(truly_new)} توکن جدید:*")
+            # جزئیات امتیاز توکن برتر
+            if truly_new:
+                top = truly_new[0]
+                summary.append("")
+                summary.append(f"### 🔍 جزئیات امتیاز توکن برتر: **{top['symbol']}**")
+                summary.append("")
+                summary.append(f"- **امتیاز کل:** `{top['score']}/100`")
+                summary.append(f"- **جزئیات:** {top['score_details']}")
+                summary.append(f"- **لینک:** [مشاهده نمودار]({top['url']})")
+            
+            telegram.append(f"🚀 *{len(truly_new)} توکن جدید کشف شد:*")
             telegram.append("")
-            for t in truly_new[:5]:
-                telegram.append(f"• *{t['symbol']}* — +{t['price_change_24h']:.0f}%")
+            for i, t in enumerate(truly_new[:5], 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                telegram.append(f"{medal} *{t['symbol']}* — امتیاز *{t['score']}/100*")
                 telegram.append(f"  💰 `${t['price']}` | 💧 `${t['liquidity']:,.0f}`")
-                telegram.append(f"  🔗 [مشاهده]({t['url']})")
+                telegram.append(f"  📈 +{t['price_change_24h']:.0f}% | 📅 {t['age_hours']:.1f}h")
+                telegram.append(f"  🔗 [نمودار]({t['url']})")
                 telegram.append("")
         
         # === پیگیری عملکرد توکن‌های قبلی ===
@@ -169,7 +273,6 @@ def main():
             else:
                 current_growth = 0
             
-            # === محاسبه حداکثر رشد بر اساس قیمت‌های دیده‌شده ===
             previous_max_price = safe_float(old.get("max_price", initial_price))
             previous_max_growth = safe_float(old.get("max_growth", 0))
             
@@ -219,24 +322,10 @@ def main():
             summary.append("|------|-----------|------------|------------|-------------|-----------|-----|------|")
             for p in performance:
                 if p["status"] == "unavailable":
-                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | N/A | {p['age_days']} | [مشاهده]({p['url']}) |")
+                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | N/A | {p['age_days']} | [نمودار]({p['url']}) |")
                 else:
                     emoji = "🟢" if p["growth"] > 0 else "🔴"
                     summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | ${p['current_price']} | {p['age_days']} | [نمودار]({p['url']}) |")
-            
-            telegram.append("📊 *عملکرد توکن‌های قبلی:*")
-            telegram.append("")
-            for p in performance[:8]:
-                if p["status"] == "unavailable":
-                    telegram.append(f"⚫ *{p['symbol']}*: نامشخص (توکن حذف شده)")
-                    telegram.append(f"  🏔 سقف ثبت‌شده: {p['max_growth']:+.0f}%")
-                else:
-                    emoji = "🟢" if p["growth"] > 0 else "🔴"
-                    telegram.append(f"{emoji} *{p['symbol']}*: {p['growth']:+.0f}%")
-                    telegram.append(f"  🏔 سقف: {p['max_growth']:+.0f}%")
-                    telegram.append(f"  💰 `${p['current_price']}`")
-                    telegram.append(f"  🔗 [نمودار کامل]({p['url']})")
-                telegram.append("")
         
         # === به‌روزرسانی تاریخچه ===
         for t in filtered:
@@ -256,7 +345,7 @@ def main():
         summary.append(f"📊 **تاریخچه:** `{len(updated_history)}` توکن")
         summary.append("")
         summary.append("---")
-        summary.append("*برای دیدن نمودار کامل و سقف واقعی، روی لینک «نمودار» هر توکن کلیک کنید.*")
+        summary.append("*امتیاز بر اساس ۵ معیار: حجم/لیک، سن، لیکوییدیتی، تغییر ۲۴س، حجم*")
         
         if not truly_new:
             telegram.append("😴 *توکن جدیدی کشف نشد.*")
