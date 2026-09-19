@@ -122,10 +122,10 @@ def main():
         if truly_new:
             summary.append("## 🚀 توکن‌های جدید کشف‌شده")
             summary.append("")
-            summary.append("| نماد | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن |")
-            summary.append("|------|------|------------|---------|-----------|-----|")
+            summary.append("| نماد | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
+            summary.append("|------|------|------------|---------|-----------|-----|------|")
             for t in truly_new[:10]:
-                summary.append(f"| {t['symbol']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
+                summary.append(f"| {t['symbol']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [مشاهده]({t['url']}) |")
             
             telegram.append(f"🚀 *{len(truly_new)} توکن جدید:*")
             telegram.append("")
@@ -135,7 +135,7 @@ def main():
                 telegram.append(f"  🔗 [مشاهده]({t['url']})")
                 telegram.append("")
         
-        # === پیگیری عملکرد توکن‌های قبلی (اصلاح‌شده) ===
+        # === پیگیری عملکرد توکن‌های قبلی ===
         print("پیگیری عملکرد توکن‌های قدیمی...")
         performance = []
         updated_history = []
@@ -156,25 +156,23 @@ def main():
                     "current_price": "N/A",
                     "initial_price": old.get("initial_price", "?"),
                     "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days,
-                    "status": "unavailable"
+                    "status": "unavailable",
+                    "url": old.get("url", "N/A")
                 })
                 continue
             
             initial_price = safe_float(old.get("initial_price", 0))
             current_price = safe_float(current["price"])
             
-            # رشد فعلی نسبت به قیمت اولیه (زمان کشف)
             if initial_price > 0:
                 current_growth = ((current_price - initial_price) / initial_price) * 100
             else:
                 current_growth = 0
             
-            # === محاسبه درست حداکثر رشد ===
-            # فقط بر اساس قیمت‌هایی که خودمان دیده‌ایم
+            # === محاسبه حداکثر رشد بر اساس قیمت‌های دیده‌شده ===
             previous_max_price = safe_float(old.get("max_price", initial_price))
             previous_max_growth = safe_float(old.get("max_growth", 0))
             
-            # اگر قیمت فعلی از حداکثر قبلی بیشتر است، آن را ثبت کن
             if current_price > previous_max_price:
                 new_max_price = current_price
                 if initial_price > 0:
@@ -185,7 +183,6 @@ def main():
                 new_max_price = previous_max_price
                 new_max_growth = previous_max_growth
             
-            # اگر این توکن جدید است، مقادیر اولیه را تنظیم کن
             if "max_price" not in old:
                 old["max_price"] = current_price
                 new_max_price = current_price
@@ -206,7 +203,8 @@ def main():
                 "current_price": current["price"],
                 "initial_price": old.get("initial_price", "?"),
                 "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days,
-                "status": "active"
+                "status": "active",
+                "url": old.get("url", current["url"])
             })
             
             updated_history.append(old)
@@ -217,14 +215,14 @@ def main():
             summary.append("")
             summary.append("## 📊 عملکرد توکن‌های قبلی")
             summary.append("")
-            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | حداکثر قیمت | قیمت فعلی | روز |")
-            summary.append("|------|-----------|------------|------------|-------------|-----------|-----|")
+            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | حداکثر قیمت | قیمت فعلی | روز | لینک |")
+            summary.append("|------|-----------|------------|------------|-------------|-----------|-----|------|")
             for p in performance:
                 if p["status"] == "unavailable":
-                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | N/A | {p['age_days']} |")
+                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | N/A | {p['age_days']} | [مشاهده]({p['url']}) |")
                 else:
                     emoji = "🟢" if p["growth"] > 0 else "🔴"
-                    summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | ${p['current_price']} | {p['age_days']} |")
+                    summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | ${p['current_price']} | {p['age_days']} | [نمودار]({p['url']}) |")
             
             telegram.append("📊 *عملکرد توکن‌های قبلی:*")
             telegram.append("")
@@ -236,10 +234,11 @@ def main():
                     emoji = "🟢" if p["growth"] > 0 else "🔴"
                     telegram.append(f"{emoji} *{p['symbol']}*: {p['growth']:+.0f}%")
                     telegram.append(f"  🏔 سقف: {p['max_growth']:+.0f}%")
-                    telegram.append(f"  💰 `${p['current_price']}` | 📅 {p['age_days']} روز")
+                    telegram.append(f"  💰 `${p['current_price']}`")
+                    telegram.append(f"  🔗 [نمودار کامل]({p['url']})")
                 telegram.append("")
         
-        # === به‌روزرسانی تاریخچه با توکن‌های جدید ===
+        # === به‌روزرسانی تاریخچه ===
         for t in filtered:
             if t["address"] not in known_addresses:
                 price_str = str(t["price"])
@@ -257,7 +256,7 @@ def main():
         summary.append(f"📊 **تاریخچه:** `{len(updated_history)}` توکن")
         summary.append("")
         summary.append("---")
-        summary.append("*حداکثر رشد فقط بر اساس قیمت‌های ثبت‌شده در اجراهای خودمان محاسبه می‌شود.*")
+        summary.append("*برای دیدن نمودار کامل و سقف واقعی، روی لینک «نمودار» هر توکن کلیک کنید.*")
         
         if not truly_new:
             telegram.append("😴 *توکن جدیدی کشف نشد.*")
