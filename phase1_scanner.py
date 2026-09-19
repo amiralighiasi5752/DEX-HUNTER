@@ -11,6 +11,9 @@ MIN_VOLUME_24H = 20000
 MAX_AGE_HOURS = 168
 MAX_TOP_HOLDER_PERCENT = 25
 MAX_TOKENS_TO_CHECK = 30
+ALERT_GROWTH_THRESHOLD = 50     # هشدار رشد ۵۰٪ از قیمت اولیه
+ALERT_BREAKOUT_THRESHOLD = 20   # هشدار شکست سقف ۲۰٪
+ALERT_PUMP_THRESHOLD = 100      # هشدار پامپ ۱۰۰٪ در ۲۴ ساعت
 
 def send_telegram(message):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -59,46 +62,31 @@ def get_token_details(token_address):
     return None
 
 def check_token_security(token_address):
-    """
-    بررسی امنیت توکن.
-    بازگشتی: dict با کلیدهای safe، reason و status
-    status: "safe" | "dangerous" | "unknown"
-    """
     try:
         url = f"https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses={token_address}"
         r = requests.get(url, timeout=10)
         if r.status_code != 200:
-            return {"safe": True, "reason": "API Error - Passed", "status": "unknown"}
-        
+            return {"safe": True, "reason": "API Error", "status": "unknown"}
         data = r.json()
         result = data.get("result", {}).get(token_address, {})
-        
-        # اگر داده‌ای برنگشت، توکن تازه است - با اخطار قبول کن
         if not result:
-            return {"safe": True, "reason": "No Data - New Token", "status": "unknown"}
-        
-        # بررسی فاکتورهای خطرناک واقعی
+            return {"safe": True, "reason": "No Data", "status": "unknown"}
         risks = []
         if result.get("mintable") == "1":
             risks.append("Mintable")
         if result.get("freezable") == "1":
             risks.append("Freezable")
-        
         top_holder_pct = float(result.get("top_holder_percent", 0) or 0) * 100
         if top_holder_pct > MAX_TOP_HOLDER_PERCENT:
             risks.append(f"Top {top_holder_pct:.1f}%")
-        
         lp_locked = float(result.get("lp_locked_percent", 0) or 0)
         if lp_locked < 50 and lp_locked > 0:
             risks.append(f"LP {lp_locked:.0f}%")
-        
-        # اگر ریسک واقعی وجود دارد، رد کن
         if risks:
             return {"safe": False, "reason": ", ".join(risks), "status": "dangerous"}
-        
         return {"safe": True, "reason": "OK", "status": "safe"}
-    except Exception as e:
-        return {"safe": True, "reason": f"Error - Passed", "status": "unknown"}
+    except Exception:
+        return {"safe": True, "reason": "Error", "status": "unknown"}
 
 def calculate_advanced_score(t):
     score = 0
@@ -189,11 +177,13 @@ def safe_float(v):
 
 def main():
     summary = []
-    summary.append("# 🎯 DEX Hunter - Phase 7")
+    summary.append("# 🎯 DEX Hunter - Phase 8 (Alerts)")
     summary.append("")
     summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
     telegram = ["🎯 *DEX Hunter - گزارش جدید*", ""]
+    alerts = []  # هشدارهای فوری
+    
     try:
         history = load_history()
         known_addresses = {i["address"] for i in history}
@@ -204,7 +194,6 @@ def main():
         all_data = []
         rejected_dangerous = 0
         rejected_filters = 0
-        passed_unknown = 0
         for token in new_tokens[:MAX_TOKENS_TO_CHECK]:
             addr = token.get("tokenAddress")
             if not addr:
@@ -215,34 +204,31 @@ def main():
             security = check_token_security(addr)
             if not security["safe"]:
                 rejected_dangerous += 1
-                print(f"  ❌ {d['symbol']} خطرناک: {security['reason']}")
                 continue
-            if security["status"] == "unknown":
-                passed_unknown += 1
             if not apply_filters(d):
                 rejected_filters += 1
                 continue
             d["score"], d["score_details"] = calculate_advanced_score(d)
             d["security_status"] = security["status"]
-            d["security_reason"] = security["reason"]
             all_data.append(d)
             time.sleep(0.3)
         summary.append(f"- **رد شده (خطرناک):** `{rejected_dangerous}`")
-        summary.append(f"- **قبول شده با اخطار (داده ناکافی):** `{passed_unknown}`")
         summary.append(f"- **رد شده (فیلتر بازار):** `{rejected_filters}`")
         summary.append(f"- **نهایی:** `{len(all_data)}`")
         summary.append("")
+        
         truly_new = [t for t in all_data if t["address"] not in known_addresses]
         truly_new.sort(key=lambda x: x["score"], reverse=True)
+        
         if truly_new:
             summary.append("## 🏆 توکن‌های جدید")
             summary.append("")
-            summary.append("| رتبه | نماد | امتیاز | وضعیت امنیت | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
-            summary.append("|------|------|--------|-------------|------|------------|---------|-----------|-----|------|")
+            summary.append("| رتبه | نماد | امتیاز | امنیت | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
+            summary.append("|------|------|--------|-------|------|------------|---------|-----------|-----|------|")
             for i, t in enumerate(truly_new[:10], 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}"
                 sec_icon = "✅" if t["security_status"] == "safe" else "⚠️"
-                summary.append(f"| {medal} | **{t['symbol']}** | **{t['score']}/100** | {sec_icon} {t['security_status']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [نمودار]({t['url']}) |")
+                summary.append(f"| {medal} | **{t['symbol']}** | **{t['score']}/100** | {sec_icon} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [نمودار]({t['url']}) |")
             telegram.append(f"🚀 *{len(truly_new)} توکن جدید:*")
             telegram.append("")
             for i, t in enumerate(truly_new[:5], 1):
@@ -256,6 +242,8 @@ def main():
         else:
             summary.append("## ⚠️ هیچ توکنی عبور نکرد")
             telegram.append("😴 *توکن جدیدی کشف نشد.*")
+        
+        # === پیگیری عملکرد و تولید هشدارها ===
         print("پیگیری عملکرد توکن‌های قدیمی...")
         performance = []
         updated_history = []
@@ -282,6 +270,28 @@ def main():
             current_growth = ((current_price - initial_price) / initial_price) * 100 if initial_price > 0 else 0
             previous_max_price = safe_float(old.get("max_price", initial_price))
             previous_max_growth = safe_float(old.get("max_growth", 0))
+            last_growth = safe_float(old.get("last_growth", 0))
+            
+            # هشدار ۱: رشد ناگهانی از قیمت اولیه
+            if current_growth >= ALERT_GROWTH_THRESHOLD and last_growth < ALERT_GROWTH_THRESHOLD:
+                alerts.append({
+                    "type": "growth",
+                    "symbol": old["symbol"],
+                    "growth": current_growth,
+                    "price": current["price"],
+                    "url": old.get("url", current["url"])
+                })
+            
+            # هشدار ۲: شکست سقف قبلی
+            if current_price > previous_max_price * (1 + ALERT_BREAKOUT_THRESHOLD / 100):
+                alerts.append({
+                    "type": "breakout",
+                    "symbol": old["symbol"],
+                    "growth": current_growth,
+                    "price": current["price"],
+                    "url": old.get("url", current["url"])
+                })
+            
             if current_price > previous_max_price:
                 new_max_price = current_price
                 new_max_growth = ((new_max_price - initial_price) / initial_price) * 100 if initial_price > 0 else 0
@@ -308,7 +318,29 @@ def main():
                 "url": old.get("url", current["url"])
             })
             updated_history.append(old)
+        
         performance.sort(key=lambda x: x["growth"], reverse=True)
+        
+        # نمایش هشدارها در تلگرام (اول از همه)
+        if alerts:
+            alert_msg = "🚨 *هشدارهای فوری* 🚨\n\n"
+            for a in alerts[:10]:
+                if a["type"] == "growth":
+                    alert_msg += f"🔥 *{a['symbol']}* — رشد ناگهانی *+{a['growth']:.0f}%*\n"
+                elif a["type"] == "breakout":
+                    alert_msg += f"🚀 *{a['symbol']}* — شکست سقف! *+{a['growth']:.0f}%*\n"
+                alert_msg += f"  💰 `${a['price']}`\n"
+                alert_msg += f"  🔗 [نمودار]({a['url']})\n\n"
+            telegram.insert(2, alert_msg)
+            summary.append("")
+            summary.append("## 🚨 هشدارهای فوری")
+            summary.append("")
+            for a in alerts[:10]:
+                if a["type"] == "growth":
+                    summary.append(f"- 🔥 **{a['symbol']}**: رشد ناگهانی **+{a['growth']:.0f}%**")
+                elif a["type"] == "breakout":
+                    summary.append(f"- 🚀 **{a['symbol']}**: شکست سقف **+{a['growth']:.0f}%**")
+        
         if performance:
             summary.append("")
             summary.append("## 📊 عملکرد توکن‌های قبلی")
@@ -321,6 +353,7 @@ def main():
                 else:
                     emoji = "🟢" if p["growth"] > 0 else "🔴"
                     summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | ${p['current_price']} | {p['age_days']} | [نمودار]({p['url']}) |")
+        
         for t in all_data:
             if t["address"] not in known_addresses:
                 price_str = str(t["price"])
@@ -328,6 +361,7 @@ def main():
                 t["initial_price"] = price_str
                 t["max_price"] = price_str
                 t["max_growth"] = 0
+                t["last_growth"] = 0
                 t["last_status"] = "active"
                 updated_history.append(t)
         updated_history = updated_history[-200:]
