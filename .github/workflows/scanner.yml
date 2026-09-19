@@ -31,6 +31,9 @@ jobs:
             history-cache-
 
       - name: Run scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python phase1_scanner.py
 
       - name: Save history cache
