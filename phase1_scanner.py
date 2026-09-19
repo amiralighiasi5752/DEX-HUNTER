@@ -10,7 +10,7 @@ MAX_LIQUIDITY = 5000000
 MIN_VOLUME_24H = 20000
 MAX_AGE_HOURS = 168
 MAX_TOP_HOLDER_PERCENT = 25
-MAX_TOKENS_TO_CHECK = 30  # افزایش از ۱۵ به ۳۰
+MAX_TOKENS_TO_CHECK = 30
 
 def send_telegram(message):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -59,31 +59,46 @@ def get_token_details(token_address):
     return None
 
 def check_token_security(token_address):
+    """
+    بررسی امنیت توکن.
+    بازگشتی: dict با کلیدهای safe، reason و status
+    status: "safe" | "dangerous" | "unknown"
+    """
     try:
         url = f"https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses={token_address}"
         r = requests.get(url, timeout=10)
         if r.status_code != 200:
-            return {"safe": False, "reason": "API Error"}
+            return {"safe": True, "reason": "API Error - Passed", "status": "unknown"}
+        
         data = r.json()
         result = data.get("result", {}).get(token_address, {})
+        
+        # اگر داده‌ای برنگشت، توکن تازه است - با اخطار قبول کن
         if not result:
-            return {"safe": False, "reason": "No Data"}
+            return {"safe": True, "reason": "No Data - New Token", "status": "unknown"}
+        
+        # بررسی فاکتورهای خطرناک واقعی
         risks = []
         if result.get("mintable") == "1":
             risks.append("Mintable")
         if result.get("freezable") == "1":
             risks.append("Freezable")
+        
         top_holder_pct = float(result.get("top_holder_percent", 0) or 0) * 100
         if top_holder_pct > MAX_TOP_HOLDER_PERCENT:
             risks.append(f"Top {top_holder_pct:.1f}%")
+        
         lp_locked = float(result.get("lp_locked_percent", 0) or 0)
-        if lp_locked < 50:
+        if lp_locked < 50 and lp_locked > 0:
             risks.append(f"LP {lp_locked:.0f}%")
+        
+        # اگر ریسک واقعی وجود دارد، رد کن
         if risks:
-            return {"safe": False, "reason": ", ".join(risks)}
-        return {"safe": True, "reason": "OK"}
+            return {"safe": False, "reason": ", ".join(risks), "status": "dangerous"}
+        
+        return {"safe": True, "reason": "OK", "status": "safe"}
     except Exception as e:
-        return {"safe": False, "reason": f"Error: {str(e)}"}
+        return {"safe": True, "reason": f"Error - Passed", "status": "unknown"}
 
 def calculate_advanced_score(t):
     score = 0
@@ -174,7 +189,7 @@ def safe_float(v):
 
 def main():
     summary = []
-    summary.append("# 🎯 DEX Hunter - Phase 6 (Optimized)")
+    summary.append("# 🎯 DEX Hunter - Phase 7")
     summary.append("")
     summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
@@ -187,8 +202,9 @@ def main():
         new_tokens = get_new_solana_tokens()
         summary.append(f"- **توکن‌های جدید سولانا:** `{len(new_tokens)}`")
         all_data = []
-        rejected_by_security = 0
-        rejected_by_filters = 0
+        rejected_dangerous = 0
+        rejected_filters = 0
+        passed_unknown = 0
         for token in new_tokens[:MAX_TOKENS_TO_CHECK]:
             addr = token.get("tokenAddress")
             if not addr:
@@ -198,17 +214,22 @@ def main():
                 continue
             security = check_token_security(addr)
             if not security["safe"]:
-                rejected_by_security += 1
-                print(f"  ❌ {d['symbol']} رد شد: {security['reason']}")
+                rejected_dangerous += 1
+                print(f"  ❌ {d['symbol']} خطرناک: {security['reason']}")
                 continue
+            if security["status"] == "unknown":
+                passed_unknown += 1
             if not apply_filters(d):
-                rejected_by_filters += 1
+                rejected_filters += 1
                 continue
             d["score"], d["score_details"] = calculate_advanced_score(d)
+            d["security_status"] = security["status"]
+            d["security_reason"] = security["reason"]
             all_data.append(d)
             time.sleep(0.3)
-        summary.append(f"- **رد شده (امنیت):** `{rejected_by_security}`")
-        summary.append(f"- **رد شده (بازار):** `{rejected_by_filters}`")
+        summary.append(f"- **رد شده (خطرناک):** `{rejected_dangerous}`")
+        summary.append(f"- **قبول شده با اخطار (داده ناکافی):** `{passed_unknown}`")
+        summary.append(f"- **رد شده (فیلتر بازار):** `{rejected_filters}`")
         summary.append(f"- **نهایی:** `{len(all_data)}`")
         summary.append("")
         truly_new = [t for t in all_data if t["address"] not in known_addresses]
@@ -216,16 +237,18 @@ def main():
         if truly_new:
             summary.append("## 🏆 توکن‌های جدید")
             summary.append("")
-            summary.append("| رتبه | نماد | امتیاز | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
-            summary.append("|------|------|--------|------|------------|---------|-----------|-----|------|")
+            summary.append("| رتبه | نماد | امتیاز | وضعیت امنیت | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
+            summary.append("|------|------|--------|-------------|------|------------|---------|-----------|-----|------|")
             for i, t in enumerate(truly_new[:10], 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}"
-                summary.append(f"| {medal} | **{t['symbol']}** | **{t['score']}/100** | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [نمودار]({t['url']}) |")
+                sec_icon = "✅" if t["security_status"] == "safe" else "⚠️"
+                summary.append(f"| {medal} | **{t['symbol']}** | **{t['score']}/100** | {sec_icon} {t['security_status']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [نمودار]({t['url']}) |")
             telegram.append(f"🚀 *{len(truly_new)} توکن جدید:*")
             telegram.append("")
             for i, t in enumerate(truly_new[:5], 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-                telegram.append(f"{medal} *{t['symbol']}* — *{t['score']}/100*")
+                sec_icon = "✅" if t["security_status"] == "safe" else "⚠️"
+                telegram.append(f"{medal} *{t['symbol']}* — *{t['score']}/100* {sec_icon}")
                 telegram.append(f"  💰 `${t['price']}` | 💧 `${t['liquidity']:,.0f}`")
                 telegram.append(f"  📈 +{t['price_change_24h']:.0f}% | 📅 {t['age_hours']:.1f}h")
                 telegram.append(f"  🔗 [نمودار]({t['url']})")
