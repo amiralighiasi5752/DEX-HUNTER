@@ -4,6 +4,35 @@ import time
 import json
 from datetime import datetime
 
+def send_telegram(message):
+    """ارسال پیام به تلگرام"""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    
+    if not token or not chat_id:
+        print("⚠️ TELEGRAM_BOT_TOKEN یا TELEGRAM_CHAT_ID تنظیم نشده است.")
+        return False
+    
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=15)
+        if response.status_code == 200:
+            print("✅ پیام تلگرام ارسال شد.")
+            return True
+        else:
+            print(f"❌ خطا در ارسال تلگرام: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ خطا در ارتباط با تلگرام: {e}")
+        return False
+
 def get_new_solana_tokens():
     """دریافت توکن‌های تازه‌لیست‌شده سولانا"""
     url = "https://api.dexscreener.com/token-profiles/latest/v1"
@@ -67,10 +96,14 @@ def save_history(history):
 
 def main():
     summary = []
-    summary.append("# 🎯 DEX Hunter - Phase 2")
+    summary.append("# 🎯 DEX Hunter - Phase 3")
     summary.append("")
     summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
+    
+    telegram_message = []
+    telegram_message.append("🎯 *DEX Hunter - گزارش جدید*")
+    telegram_message.append("")
     
     try:
         history = load_history()
@@ -100,6 +133,7 @@ def main():
         summary.append(f"- **توکن‌های کاملاً جدید:** `{len(truly_new)}`")
         summary.append("")
         
+        # توکن‌های جدید کشف‌شده
         if truly_new:
             summary.append("## 🚀 توکن‌های جدید کشف‌شده")
             summary.append("")
@@ -107,7 +141,52 @@ def main():
             summary.append("|------|------|------------|---------|-----------|-----|")
             for t in truly_new[:10]:
                 summary.append(f"| {t['symbol']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
+            
+            telegram_message.append(f"🚀 *{len(truly_new)} توکن جدید کشف شد:*")
+            telegram_message.append("")
+            for t in truly_new[:5]:
+                telegram_message.append(f"• *{t['symbol']}* — +{t['price_change_24h']:.0f}%")
+                telegram_message.append(f"  💰 `${t['price']}` | 💧 `${t['liquidity']:,.0f}`")
+                telegram_message.append(f"  🔗 [مشاهده]({t['url']})")
+                telegram_message.append("")
         
+        # رصد رشد توکن‌های قدیمی
+        growth_alerts = []
+        for t in filtered:
+            if t["address"] in known_addresses:
+                old = next((h for h in history if h["address"] == t["address"]), None)
+                if old and "initial_price" in old:
+                    try:
+                        old_price = float(old["initial_price"])
+                        new_price = float(t["price"])
+                        if old_price > 0:
+                            growth = ((new_price - old_price) / old_price) * 100
+                            if growth >= 50:
+                                growth_alerts.append({
+                                    "symbol": t["symbol"],
+                                    "growth": growth,
+                                    "price": t["price"],
+                                    "url": t["url"]
+                                })
+                    except Exception:
+                        pass
+        
+        if growth_alerts:
+            summary.append("")
+            summary.append("## 📈 رشد توکن‌های قبلی (+۵۰٪ از زمان کشف)")
+            summary.append("")
+            for g in growth_alerts:
+                summary.append(f"- **{g['symbol']}**: +{g['growth']:.0f}% (قیمت فعلی: ${g['price']})")
+            
+            telegram_message.append(f"📈 *{len(growth_alerts)} توکن رشد چشمگیر داشتند:*")
+            telegram_message.append("")
+            for g in growth_alerts[:5]:
+                telegram_message.append(f"• *{g['symbol']}* — 🚀 +{g['growth']:.0f}% از زمان کشف")
+                telegram_message.append(f"  💰 `${g['price']}`")
+                telegram_message.append(f"  🔗 [مشاهده]({g['url']})")
+                telegram_message.append("")
+        
+        # تاریخچه
         if filtered:
             summary.append("")
             summary.append("## 📜 تاریخچه (توکن‌های فعال)")
@@ -118,6 +197,7 @@ def main():
                 marker = "🆕" if t["address"] not in known_addresses else "📌"
                 summary.append(f"| {marker} {t['symbol']} | ${t['price']} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
         
+        # به‌روزرسانی تاریخچه
         for t in filtered:
             if t["address"] not in known_addresses:
                 t["discovered_at"] = datetime.utcnow().isoformat()
@@ -133,9 +213,23 @@ def main():
         summary.append("---")
         summary.append("*سلب مسئولیت: این ابزار تحلیلی است و سیگنال خرید نیست.*")
         
+        # اگر توکن جدید یا رشد چشمگیر نبود، پیام خلاصه بفرست
+        if not truly_new and not growth_alerts:
+            telegram_message.append("😴 *گزارش دوره‌ای*")
+            telegram_message.append("")
+            telegram_message.append(f"• {len(new_tokens)} توکن جدید اسکن شد")
+            telegram_message.append(f"• {len(filtered)} توکن از فیلترها عبور کرد")
+            telegram_message.append("• هیچ توکن جدید یا رشد چشمگیری یافت نشد")
+            telegram_message.append("")
+            telegram_message.append(f"📊 تاریخچه: {len(history)} توکن")
+        
+        # ارسال به تلگرام
+        send_telegram("\n".join(telegram_message))
+        
     except Exception as e:
         summary.append("## ❌ خطا")
         summary.append(f"```\n{type(e).__name__}: {e}\n```")
+        send_telegram(f"❌ *خطا در DEX Hunter*\n\n`{type(e).__name__}: {e}`")
     
     summary_text = "\n".join(summary)
     print(summary_text)
