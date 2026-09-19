@@ -312,6 +312,45 @@ def main():
             updated_history.append(old)
         performance.sort(key=lambda x: x["growth"], reverse=True)
         
+        # === لیست کامل توکن‌ها (در Summary و تلگرام) ===
+        if performance:
+            summary.append("")
+            summary.append(f"## 📜 لیست کامل توکن‌ها ({len(performance)} توکن)")
+            summary.append("")
+            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | قیمت فعلی | سن (روز) | وضعیت | لینک |")
+            summary.append("|------|-----------|------------|------------|-----------|----------|--------|------|")
+            for p in performance:
+                if p["status"] == "unavailable":
+                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | N/A | {p['age_days']} | نامشخص | [نمودار]({p['url']}) |")
+                else:
+                    emoji = "🟢" if p["growth"] > 0 else "🔴"
+                    summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['current_price']} | {p['age_days']} | فعال | [نمودار]({p['url']}) |")
+            
+            # خلاصه آماری
+            winners = [p for p in performance if p["max_growth"] >= 100]
+            big_winners = [p for p in performance if p["max_growth"] >= 500]
+            mega_winners = [p for p in performance if p["max_growth"] >= 1000]
+            
+            summary.append("")
+            summary.append("## 📊 آمار کلی")
+            summary.append("")
+            summary.append(f"- **کل توکن‌ها:** `{len(performance)}`")
+            summary.append(f"- **برندگان (حداکثر +۱۰۰٪):** `{len(winners)}`")
+            summary.append(f"- **برندگان بزرگ (حداکثر +۵۰۰٪):** `{len(big_winners)}`")
+            summary.append(f"- **شکارچیان ۱۰۰۰٪:** `{len(mega_winners)}`")
+            
+            telegram.append("")
+            telegram.append(f"📜 *لیست کامل ({len(performance)} توکن):*")
+            telegram.append("")
+            for p in performance[:20]:
+                if p["status"] == "unavailable":
+                    telegram.append(f"⚫ *{p['symbol']}*: نامشخص (حذف شده)")
+                else:
+                    emoji = "🟢" if p["growth"] > 0 else "🔴"
+                    telegram.append(f"{emoji} *{p['symbol']}*: {p['growth']:+.0f}% (سقف: {p['max_growth']:+.0f}%)")
+            telegram.append("")
+            telegram.append(f"📊 *آمار:* {len(mega_winners)} شکارچی ۱۰۰۰٪")
+        
         if alerts:
             alert_msg = "🚨 *هشدارهای فوری* 🚨\n\n"
             for a in alerts[:10]:
@@ -331,19 +370,6 @@ def main():
                 elif a["type"] == "breakout":
                     summary.append(f"- 🚀 **{a['symbol']}**: شکست سقف **+{a['growth']:.0f}%**")
         
-        if performance:
-            summary.append("")
-            summary.append("## 📊 عملکرد توکن‌های قبلی")
-            summary.append("")
-            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | حداکثر قیمت | قیمت فعلی | روز | لینک |")
-            summary.append("|------|-----------|------------|------------|-------------|-----------|-----|------|")
-            for p in performance:
-                if p["status"] == "unavailable":
-                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | N/A | {p['age_days']} | [نمودار]({p['url']}) |")
-                else:
-                    emoji = "🟢" if p["growth"] > 0 else "🔴"
-                    summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | ${p['current_price']} | {p['age_days']} | [نمودار]({p['url']}) |")
-        
         for t in all_data:
             if t["address"] not in known_addresses:
                 price_str = str(t["price"])
@@ -358,7 +384,7 @@ def main():
         updated_history = updated_history[-200:]
         save_history(updated_history)
         summary.append("")
-        summary.append(f"📊 **تاریخچه:** `{len(updated_history)}` توکن")
+        summary.append(f"📊 **تاریخچه ذخیره‌شده:** `{len(updated_history)}` توکن")
         send_telegram("\n".join(telegram))
     except Exception as e:
         summary.append("## ❌ خطا")
