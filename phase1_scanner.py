@@ -5,82 +5,90 @@ import json
 from datetime import datetime
 
 def send_telegram(message):
-    """ارسال پیام به تلگرام"""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    
     if not token or not chat_id:
-        print("⚠️ TELEGRAM_BOT_TOKEN یا TELEGRAM_CHAT_ID تنظیم نشده است.")
+        print("⚠️ TELEGRAM تنظیم نشده.")
         return False
-    
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
-    
     try:
-        response = requests.post(url, json=payload, timeout=15)
-        if response.status_code == 200:
-            print("✅ پیام تلگرام ارسال شد.")
-            return True
-        else:
-            print(f"❌ خطا در ارسال تلگرام: {response.status_code} - {response.text}")
-            return False
+        r = requests.post(url, json={
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True
+        }, timeout=15)
+        return r.status_code == 200
     except Exception as e:
-        print(f"❌ خطا در ارتباط با تلگرام: {e}")
+        print(f"❌ خطا: {e}")
         return False
 
 def get_new_solana_tokens():
-    """دریافت توکن‌های تازه‌لیست‌شده سولانا"""
     url = "https://api.dexscreener.com/token-profiles/latest/v1"
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-    return [item for item in data if item.get("chainId") == "solana"]
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    return [i for i in r.json() if i.get("chainId") == "solana"]
 
 def get_token_details(token_address):
-    """دریافت داده‌های عمیق برای هر توکن"""
     url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
     try:
-        response = requests.get(url, timeout=15)
-        if response.status_code != 200:
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
             return None
-        data = response.json()
+        data = r.json()
         if "pairs" in data and data["pairs"]:
-            best_pair = max(data["pairs"], key=lambda p: p.get("liquidity", {}).get("usd", 0) or 0)
+            best = max(data["pairs"], key=lambda p: p.get("liquidity", {}).get("usd", 0) or 0)
             return {
-                "symbol": best_pair.get("baseToken", {}).get("symbol", "?"),
+                "symbol": best.get("baseToken", {}).get("symbol", "?"),
                 "address": token_address,
-                "price": best_pair.get("priceUsd", "N/A"),
-                "liquidity": best_pair.get("liquidity", {}).get("usd", 0) or 0,
-                "volume_24h": best_pair.get("volume", {}).get("h24", 0) or 0,
-                "price_change_24h": best_pair.get("priceChange", {}).get("h24", 0) or 0,
-                "age_hours": (time.time() * 1000 - (best_pair.get("pairCreatedAt", time.time() * 1000))) / 3600000,
-                "url": best_pair.get("url", "N/A")
+                "pair_address": best.get("pairAddress", ""),
+                "price": best.get("priceUsd", "0"),
+                "liquidity": best.get("liquidity", {}).get("usd", 0) or 0,
+                "volume_24h": best.get("volume", {}).get("h24", 0) or 0,
+                "price_change_24h": best.get("priceChange", {}).get("h24", 0) or 0,
+                "age_hours": (time.time() * 1000 - (best.get("pairCreatedAt", time.time() * 1000))) / 3600000,
+                "url": best.get("url", "N/A"),
+                "fdv": best.get("fdv", 0) or 0
             }
     except Exception:
         return None
     return None
 
-def apply_filters(token_data):
-    """اعمال فیلترهای سختگیرانه"""
-    if not token_data:
+def get_max_price_since(pair_address, since_timestamp):
+    """
+    دریافت بالاترین قیمت از زمان مشخص با استفاده از کندل‌های تاریخی
+    """
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{pair_address}"
+        # DEXScreener اندپوینت مستقیم کندل ندارد، از داده‌های جفت استفاده می‌کنیم
+        # برای کندل‌های دقیق‌تر، از Birdeye یا Moralis استفاده خواهیم کرد
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if "pair" in data:
+            pair = data["pair"]
+            # بالاترین قیمت ۲۴ ساعته
+            high_24h = pair.get("priceChange", {}).get("h24", 0)
+            return pair
+    except Exception:
+        return None
+    return None
+
+def apply_filters(t):
+    if not t:
         return False
-    if not (10000 < token_data["liquidity"] < 1000000):
+    if not (10000 < t["liquidity"] < 1000000):
         return False
-    if token_data["volume_24h"] < 50000:
+    if t["volume_24h"] < 50000:
         return False
-    if token_data["age_hours"] > 72:
+    if t["age_hours"] > 72:
         return False
-    if token_data["price_change_24h"] < 0:
+    if t["price_change_24h"] < 0:
         return False
     return True
 
 def load_history():
-    """بارگذاری تاریخچه از فایل"""
     if os.path.exists("history.json"):
         try:
             with open("history.json", "r", encoding="utf-8") as f:
@@ -89,51 +97,51 @@ def load_history():
             return []
     return []
 
-def save_history(history):
-    """ذخیره تاریخچه در فایل"""
+def save_history(h):
     with open("history.json", "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
+        json.dump(h, f, ensure_ascii=False, indent=2)
+
+def safe_float(v):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
 
 def main():
     summary = []
-    summary.append("# 🎯 DEX Hunter - Phase 3")
+    summary.append("# 🎯 DEX Hunter - Phase 4")
     summary.append("")
     summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
     
-    telegram_message = []
-    telegram_message.append("🎯 *DEX Hunter - گزارش جدید*")
-    telegram_message.append("")
+    telegram = ["🎯 *DEX Hunter - گزارش جدید*", ""]
     
     try:
         history = load_history()
-        known_addresses = {item["address"] for item in history}
+        known_addresses = {i["address"] for i in history}
         summary.append(f"- **تاریخچه قبلی:** `{len(history)}` توکن")
         summary.append("")
         
-        print("دریافت توکن‌های جدید سولانا...")
+        # === بخش ۱: کشف توکن‌های جدید ===
+        print("دریافت توکن‌های جدید...")
         new_tokens = get_new_solana_tokens()
         summary.append(f"- **توکن‌های جدید سولانا:** `{len(new_tokens)}`")
         
-        print("دریافت داده‌های عمیق...")
         all_data = []
         for token in new_tokens[:15]:
-            address = token.get("tokenAddress")
-            if address:
-                details = get_token_details(address)
-                if details:
-                    all_data.append(details)
+            addr = token.get("tokenAddress")
+            if addr:
+                d = get_token_details(addr)
+                if d:
+                    all_data.append(d)
             time.sleep(0.5)
         
         filtered = [t for t in all_data if apply_filters(t)]
-        summary.append(f"- **توکن‌های پس از فیلتر:** `{len(filtered)}`")
+        summary.append(f"- **توکن‌های جدید پس از فیلتر:** `{len(filtered)}`")
         summary.append("")
         
         truly_new = [t for t in filtered if t["address"] not in known_addresses]
-        summary.append(f"- **توکن‌های کاملاً جدید:** `{len(truly_new)}`")
-        summary.append("")
         
-        # توکن‌های جدید کشف‌شده
         if truly_new:
             summary.append("## 🚀 توکن‌های جدید کشف‌شده")
             summary.append("")
@@ -142,102 +150,133 @@ def main():
             for t in truly_new[:10]:
                 summary.append(f"| {t['symbol']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
             
-            telegram_message.append(f"🚀 *{len(truly_new)} توکن جدید کشف شد:*")
-            telegram_message.append("")
+            telegram.append(f"🚀 *{len(truly_new)} توکن جدید:*")
+            telegram.append("")
             for t in truly_new[:5]:
-                telegram_message.append(f"• *{t['symbol']}* — +{t['price_change_24h']:.0f}%")
-                telegram_message.append(f"  💰 `${t['price']}` | 💧 `${t['liquidity']:,.0f}`")
-                telegram_message.append(f"  🔗 [مشاهده]({t['url']})")
-                telegram_message.append("")
+                telegram.append(f"• *{t['symbol']}* — +{t['price_change_24h']:.0f}%")
+                telegram.append(f"  💰 `${t['price']}` | 💧 `${t['liquidity']:,.0f}`")
+                telegram.append(f"  🔗 [مشاهده]({t['url']})")
+                telegram.append("")
         
-        # رصد رشد توکن‌های قدیمی
-        growth_alerts = []
-        for t in filtered:
-            if t["address"] in known_addresses:
-                old = next((h for h in history if h["address"] == t["address"]), None)
-                if old and "initial_price" in old:
-                    try:
-                        old_price = float(old["initial_price"])
-                        new_price = float(t["price"])
-                        if old_price > 0:
-                            growth = ((new_price - old_price) / old_price) * 100
-                            if growth >= 50:
-                                growth_alerts.append({
-                                    "symbol": t["symbol"],
-                                    "growth": growth,
-                                    "price": t["price"],
-                                    "url": t["url"]
-                                })
-                    except Exception:
-                        pass
+        # === بخش ۲: پیگیری عملکرد توکن‌های قبلی ===
+        print("پیگیری عملکرد توکن‌های قدیمی...")
+        performance = []
+        updated_history = []
         
-        if growth_alerts:
-            summary.append("")
-            summary.append("## 📈 رشد توکن‌های قبلی (+۵۰٪ از زمان کشف)")
-            summary.append("")
-            for g in growth_alerts:
-                summary.append(f"- **{g['symbol']}**: +{g['growth']:.0f}% (قیمت فعلی: ${g['price']})")
+        for old in history:
+            addr = old["address"]
+            current = get_token_details(addr)
+            time.sleep(0.4)
             
-            telegram_message.append(f"📈 *{len(growth_alerts)} توکن رشد چشمگیر داشتند:*")
-            telegram_message.append("")
-            for g in growth_alerts[:5]:
-                telegram_message.append(f"• *{g['symbol']}* — 🚀 +{g['growth']:.0f}% از زمان کشف")
-                telegram_message.append(f"  💰 `${g['price']}`")
-                telegram_message.append(f"  🔗 [مشاهده]({g['url']})")
-                telegram_message.append("")
+            if not current:
+                old["last_status"] = "unavailable"
+                updated_history.append(old)
+                continue
+            
+            initial_price = safe_float(old.get("initial_price", 0))
+            current_price = safe_float(current["price"])
+            
+            if initial_price > 0:
+                current_growth = ((current_price - initial_price) / initial_price) * 100
+            else:
+                current_growth = 0
+            
+            # محاسبه حداکثر رشد از تغییرات ۲۴ ساعته
+            # (این یک تقریب است، چون DEXScreener کندل تاریخی نمی‌دهد)
+            max_growth_estimate = old.get("max_growth", current_growth)
+            if current_growth > max_growth_estimate:
+                max_growth_estimate = current_growth
+            
+            # محاسبه تخمینی حداکثر رشد با استفاده از price_change_24h
+            change_24h = safe_float(current.get("price_change_24h", 0))
+            if initial_price > 0 and change_24h > 0:
+                # اگر ۲۴ ساعت اخیر تغییر مثبت داشت، احتمالاً اوج بالاتر بوده
+                estimated_high = current_price * (1 + change_24h / 100)
+                estimated_max_growth = ((estimated_high - initial_price) / initial_price) * 100
+                if estimated_max_growth > max_growth_estimate:
+                    max_growth_estimate = estimated_max_growth
+            
+            old["last_price"] = current["price"]
+            old["last_growth"] = current_growth
+            old["max_growth"] = max_growth_estimate
+            old["last_seen"] = datetime.utcnow().isoformat()
+            old["last_status"] = "active"
+            
+            performance.append({
+                "symbol": old["symbol"],
+                "growth": current_growth,
+                "max_growth": max_growth_estimate,
+                "current_price": current["price"],
+                "initial_price": old.get("initial_price", "?"),
+                "url": old.get("url", current["url"]),
+                "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days
+            })
+            
+            updated_history.append(old)
         
-        # تاریخچه
-        if filtered:
+        performance.sort(key=lambda x: x["growth"], reverse=True)
+        
+        if performance:
             summary.append("")
-            summary.append("## 📜 تاریخچه (توکن‌های فعال)")
+            summary.append("## 📊 عملکرد توکن‌های قبلی")
             summary.append("")
-            summary.append("| نماد | قیمت | تغییر ۲۴س | سن |")
-            summary.append("|------|------|-----------|-----|")
-            for t in filtered[:5]:
-                marker = "🆕" if t["address"] not in known_addresses else "📌"
-                summary.append(f"| {marker} {t['symbol']} | ${t['price']} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
+            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | قیمت فعلی | روز |")
+            summary.append("|------|----------|------------|------------|-----------|-----|")
+            for p in performance:
+                emoji = "🟢" if p["growth"] > 0 else "🔴"
+                summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['current_price']} | {p['age_days']} |")
+            
+            telegram.append("📊 *عملکرد توکن‌های قبلی:*")
+            telegram.append("")
+            for p in performance[:8]:
+                emoji = "🟢" if p["growth"] > 0 else "🔴"
+                telegram.append(f"{emoji} *{p['symbol']}*: {p['growth']:+.0f}%")
+                telegram.append(f"  🏔 سقف: {p['max_growth']:+.0f}%")
+                telegram.append(f"  💰 `${p['current_price']}` | 📅 {p['age_days']} روز")
+                telegram.append("")
+            
+            winners = [p for p in performance if p["max_growth"] >= 100]
+            if winners:
+                telegram.append(f"🏆 *{len(winners)} توکن با سقف +۱۰۰٪:*")
+                for w in winners[:3]:
+                    telegram.append(f"  • {w['symbol']}: سقف +{w['max_growth']:.0f}%")
+                telegram.append("")
         
         # به‌روزرسانی تاریخچه
         for t in filtered:
             if t["address"] not in known_addresses:
                 t["discovered_at"] = datetime.utcnow().isoformat()
                 t["initial_price"] = t["price"]
-                history.append(t)
+                t["max_growth"] = 0
+                t["last_status"] = "active"
+                updated_history.append(t)
         
-        history = history[-100:]
-        save_history(history)
+        updated_history = updated_history[-200:]
+        save_history(updated_history)
         
         summary.append("")
-        summary.append(f"📊 **تاریخچه به‌روزرسانی شد:** `{len(history)}` توکن")
+        summary.append(f"📊 **تاریخچه:** `{len(updated_history)}` توکن")
         summary.append("")
         summary.append("---")
-        summary.append("*سلب مسئولیت: این ابزار تحلیلی است و سیگنال خرید نیست.*")
+        summary.append("*توجه: حداکثر رشد بر اساس داده‌های لحظه‌ای تخمین زده می‌شود.*")
         
-        # اگر توکن جدید یا رشد چشمگیر نبود، پیام خلاصه بفرست
-        if not truly_new and not growth_alerts:
-            telegram_message.append("😴 *گزارش دوره‌ای*")
-            telegram_message.append("")
-            telegram_message.append(f"• {len(new_tokens)} توکن جدید اسکن شد")
-            telegram_message.append(f"• {len(filtered)} توکن از فیلترها عبور کرد")
-            telegram_message.append("• هیچ توکن جدید یا رشد چشمگیری یافت نشد")
-            telegram_message.append("")
-            telegram_message.append(f"📊 تاریخچه: {len(history)} توکن")
+        if not truly_new:
+            telegram.append("😴 *توکن جدیدی کشف نشد.*")
         
-        # ارسال به تلگرام
-        send_telegram("\n".join(telegram_message))
+        send_telegram("\n".join(telegram))
         
     except Exception as e:
         summary.append("## ❌ خطا")
         summary.append(f"```\n{type(e).__name__}: {e}\n```")
-        send_telegram(f"❌ *خطا در DEX Hunter*\n\n`{type(e).__name__}: {e}`")
+        send_telegram(f"❌ *خطا:* `{type(e).__name__}: {e}`")
     
-    summary_text = "\n".join(summary)
-    print(summary_text)
+    txt = "\n".join(summary)
+    print(txt)
     
-    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary_file:
-        with open(summary_file, "w", encoding="utf-8") as f:
-            f.write(summary_text)
+    sf = os.environ.get("GITHUB_STEP_SUMMARY")
+    if sf:
+        with open(sf, "w", encoding="utf-8") as f:
+            f.write(txt)
 
 if __name__ == '__main__':
     main()
