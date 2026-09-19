@@ -1,7 +1,8 @@
 name: Crypto Hunter Scanner
+
 on:
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
@@ -20,15 +21,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Cache history
+        uses: actions/cache@v4
+        with:
+          path: history.json
+          key: history-${{ github.run_id }}
+          restore-keys: |
+            history-
+
       - name: Run scanner
         run: python phase1_scanner.py
 
-      - name: Upload results
-        uses: actions/upload-artifact@v4
+      - name: Save history to cache
+        uses: actions/cache/save@v4
+        if: always()
         with:
-          name: scan-results
-          path: |
-            new_tokens.txt
-            markets.txt
-            result.txt
-          if-no-files-found: warn
+          path: history.json
+          key: history-${{ github.run_id }}
