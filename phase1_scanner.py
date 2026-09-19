@@ -41,36 +41,13 @@ def get_token_details(token_address):
             return {
                 "symbol": best.get("baseToken", {}).get("symbol", "?"),
                 "address": token_address,
-                "pair_address": best.get("pairAddress", ""),
                 "price": best.get("priceUsd", "0"),
                 "liquidity": best.get("liquidity", {}).get("usd", 0) or 0,
                 "volume_24h": best.get("volume", {}).get("h24", 0) or 0,
                 "price_change_24h": best.get("priceChange", {}).get("h24", 0) or 0,
                 "age_hours": (time.time() * 1000 - (best.get("pairCreatedAt", time.time() * 1000))) / 3600000,
-                "url": best.get("url", "N/A"),
-                "fdv": best.get("fdv", 0) or 0
+                "url": best.get("url", "N/A")
             }
-    except Exception:
-        return None
-    return None
-
-def get_max_price_since(pair_address, since_timestamp):
-    """
-    دریافت بالاترین قیمت از زمان مشخص با استفاده از کندل‌های تاریخی
-    """
-    try:
-        url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{pair_address}"
-        # DEXScreener اندپوینت مستقیم کندل ندارد، از داده‌های جفت استفاده می‌کنیم
-        # برای کندل‌های دقیق‌تر، از Birdeye یا Moralis استفاده خواهیم کرد
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        if "pair" in data:
-            pair = data["pair"]
-            # بالاترین قیمت ۲۴ ساعته
-            high_24h = pair.get("priceChange", {}).get("h24", 0)
-            return pair
     except Exception:
         return None
     return None
@@ -122,7 +99,7 @@ def main():
         summary.append(f"- **تاریخچه قبلی:** `{len(history)}` توکن")
         summary.append("")
         
-        # === بخش ۱: کشف توکن‌های جدید ===
+        # === کشف توکن‌های جدید ===
         print("دریافت توکن‌های جدید...")
         new_tokens = get_new_solana_tokens()
         summary.append(f"- **توکن‌های جدید سولانا:** `{len(new_tokens)}`")
@@ -158,7 +135,7 @@ def main():
                 telegram.append(f"  🔗 [مشاهده]({t['url']})")
                 telegram.append("")
         
-        # === بخش ۲: پیگیری عملکرد توکن‌های قبلی ===
+        # === پیگیری عملکرد توکن‌های قبلی (اصلاح‌شده) ===
         print("پیگیری عملکرد توکن‌های قدیمی...")
         performance = []
         updated_history = []
@@ -171,45 +148,65 @@ def main():
             if not current:
                 old["last_status"] = "unavailable"
                 updated_history.append(old)
+                performance.append({
+                    "symbol": old["symbol"],
+                    "growth": 0,
+                    "max_growth": old.get("max_growth", 0),
+                    "max_price": old.get("max_price", "?"),
+                    "current_price": "N/A",
+                    "initial_price": old.get("initial_price", "?"),
+                    "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days,
+                    "status": "unavailable"
+                })
                 continue
             
             initial_price = safe_float(old.get("initial_price", 0))
             current_price = safe_float(current["price"])
             
+            # رشد فعلی نسبت به قیمت اولیه (زمان کشف)
             if initial_price > 0:
                 current_growth = ((current_price - initial_price) / initial_price) * 100
             else:
                 current_growth = 0
             
-            # محاسبه حداکثر رشد از تغییرات ۲۴ ساعته
-            # (این یک تقریب است، چون DEXScreener کندل تاریخی نمی‌دهد)
-            max_growth_estimate = old.get("max_growth", current_growth)
-            if current_growth > max_growth_estimate:
-                max_growth_estimate = current_growth
+            # === محاسبه درست حداکثر رشد ===
+            # فقط بر اساس قیمت‌هایی که خودمان دیده‌ایم
+            previous_max_price = safe_float(old.get("max_price", initial_price))
+            previous_max_growth = safe_float(old.get("max_growth", 0))
             
-            # محاسبه تخمینی حداکثر رشد با استفاده از price_change_24h
-            change_24h = safe_float(current.get("price_change_24h", 0))
-            if initial_price > 0 and change_24h > 0:
-                # اگر ۲۴ ساعت اخیر تغییر مثبت داشت، احتمالاً اوج بالاتر بوده
-                estimated_high = current_price * (1 + change_24h / 100)
-                estimated_max_growth = ((estimated_high - initial_price) / initial_price) * 100
-                if estimated_max_growth > max_growth_estimate:
-                    max_growth_estimate = estimated_max_growth
+            # اگر قیمت فعلی از حداکثر قبلی بیشتر است، آن را ثبت کن
+            if current_price > previous_max_price:
+                new_max_price = current_price
+                if initial_price > 0:
+                    new_max_growth = ((new_max_price - initial_price) / initial_price) * 100
+                else:
+                    new_max_growth = 0
+            else:
+                new_max_price = previous_max_price
+                new_max_growth = previous_max_growth
+            
+            # اگر این توکن جدید است، مقادیر اولیه را تنظیم کن
+            if "max_price" not in old:
+                old["max_price"] = current_price
+                new_max_price = current_price
+                new_max_growth = current_growth
             
             old["last_price"] = current["price"]
             old["last_growth"] = current_growth
-            old["max_growth"] = max_growth_estimate
+            old["max_price"] = str(new_max_price)
+            old["max_growth"] = new_max_growth
             old["last_seen"] = datetime.utcnow().isoformat()
             old["last_status"] = "active"
             
             performance.append({
                 "symbol": old["symbol"],
                 "growth": current_growth,
-                "max_growth": max_growth_estimate,
+                "max_growth": new_max_growth,
+                "max_price": str(new_max_price),
                 "current_price": current["price"],
                 "initial_price": old.get("initial_price", "?"),
-                "url": old.get("url", current["url"]),
-                "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days
+                "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days,
+                "status": "active"
             })
             
             updated_history.append(old)
@@ -220,33 +217,35 @@ def main():
             summary.append("")
             summary.append("## 📊 عملکرد توکن‌های قبلی")
             summary.append("")
-            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | قیمت فعلی | روز |")
-            summary.append("|------|----------|------------|------------|-----------|-----|")
+            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | حداکثر قیمت | قیمت فعلی | روز |")
+            summary.append("|------|-----------|------------|------------|-------------|-----------|-----|")
             for p in performance:
-                emoji = "🟢" if p["growth"] > 0 else "🔴"
-                summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['current_price']} | {p['age_days']} |")
+                if p["status"] == "unavailable":
+                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | N/A | {p['age_days']} |")
+                else:
+                    emoji = "🟢" if p["growth"] > 0 else "🔴"
+                    summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['max_price']} | ${p['current_price']} | {p['age_days']} |")
             
             telegram.append("📊 *عملکرد توکن‌های قبلی:*")
             telegram.append("")
             for p in performance[:8]:
-                emoji = "🟢" if p["growth"] > 0 else "🔴"
-                telegram.append(f"{emoji} *{p['symbol']}*: {p['growth']:+.0f}%")
-                telegram.append(f"  🏔 سقف: {p['max_growth']:+.0f}%")
-                telegram.append(f"  💰 `${p['current_price']}` | 📅 {p['age_days']} روز")
-                telegram.append("")
-            
-            winners = [p for p in performance if p["max_growth"] >= 100]
-            if winners:
-                telegram.append(f"🏆 *{len(winners)} توکن با سقف +۱۰۰٪:*")
-                for w in winners[:3]:
-                    telegram.append(f"  • {w['symbol']}: سقف +{w['max_growth']:.0f}%")
+                if p["status"] == "unavailable":
+                    telegram.append(f"⚫ *{p['symbol']}*: نامشخص (توکن حذف شده)")
+                    telegram.append(f"  🏔 سقف ثبت‌شده: {p['max_growth']:+.0f}%")
+                else:
+                    emoji = "🟢" if p["growth"] > 0 else "🔴"
+                    telegram.append(f"{emoji} *{p['symbol']}*: {p['growth']:+.0f}%")
+                    telegram.append(f"  🏔 سقف: {p['max_growth']:+.0f}%")
+                    telegram.append(f"  💰 `${p['current_price']}` | 📅 {p['age_days']} روز")
                 telegram.append("")
         
-        # به‌روزرسانی تاریخچه
+        # === به‌روزرسانی تاریخچه با توکن‌های جدید ===
         for t in filtered:
             if t["address"] not in known_addresses:
+                price_str = str(t["price"])
                 t["discovered_at"] = datetime.utcnow().isoformat()
-                t["initial_price"] = t["price"]
+                t["initial_price"] = price_str
+                t["max_price"] = price_str
                 t["max_growth"] = 0
                 t["last_status"] = "active"
                 updated_history.append(t)
@@ -258,7 +257,7 @@ def main():
         summary.append(f"📊 **تاریخچه:** `{len(updated_history)}` توکن")
         summary.append("")
         summary.append("---")
-        summary.append("*توجه: حداکثر رشد بر اساس داده‌های لحظه‌ای تخمین زده می‌شود.*")
+        summary.append("*حداکثر رشد فقط بر اساس قیمت‌های ثبت‌شده در اجراهای خودمان محاسبه می‌شود.*")
         
         if not truly_new:
             telegram.append("😴 *توکن جدیدی کشف نشد.*")
