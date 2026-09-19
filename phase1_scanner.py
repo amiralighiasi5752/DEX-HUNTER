@@ -73,19 +73,16 @@ def main():
     summary.append("")
     
     try:
-        # بارگذاری تاریخچه
         history = load_history()
         known_addresses = {item["address"] for item in history}
         summary.append(f"- **تاریخچه قبلی:** `{len(history)}` توکن")
         summary.append("")
         
-        # مرحله ۱
-        print("🔄 دریافت توکن‌های جدید سولانا...")
+        print("دریافت توکن‌های جدید سولانا...")
         new_tokens = get_new_solana_tokens()
         summary.append(f"- **توکن‌های جدید سولانا:** `{len(new_tokens)}`")
         
-        # مرحله ۲
-        print("🔍 دریافت داده‌های عمیق...")
+        print("دریافت داده‌های عمیق...")
         all_data = []
         for token in new_tokens[:15]:
             address = token.get("tokenAddress")
@@ -95,17 +92,14 @@ def main():
                     all_data.append(details)
             time.sleep(0.5)
         
-        # مرحله ۳
         filtered = [t for t in all_data if apply_filters(t)]
         summary.append(f"- **توکن‌های پس از فیلتر:** `{len(filtered)}`")
         summary.append("")
         
-        # توکن‌های جدید (نه در تاریخچه قبلی)
         truly_new = [t for t in filtered if t["address"] not in known_addresses]
         summary.append(f"- **توکن‌های کاملاً جدید:** `{len(truly_new)}`")
         summary.append("")
         
-        # نمایش توکن‌های جدید
         if truly_new:
             summary.append("## 🚀 توکن‌های جدید کشف‌شده")
             summary.append("")
@@ -114,7 +108,6 @@ def main():
             for t in truly_new[:10]:
                 summary.append(f"| {t['symbol']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
         
-        # نمایش تاریخچه (توکن‌های قبلی که هنوز فعال هستند)
         if filtered:
             summary.append("")
             summary.append("## 📜 تاریخچه (توکن‌های فعال)")
@@ -125,14 +118,12 @@ def main():
                 marker = "🆕" if t["address"] not in known_addresses else "📌"
                 summary.append(f"| {marker} {t['symbol']} | ${t['price']} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
         
-        # به‌روزرسانی تاریخچه (اضافه کردن توکن‌های جدید)
         for t in filtered:
             if t["address"] not in known_addresses:
                 t["discovered_at"] = datetime.utcnow().isoformat()
                 t["initial_price"] = t["price"]
                 history.append(t)
         
-        # نگه‌داشتن فقط ۱۰۰ توکن آخر
         history = history[-100:]
         save_history(history)
         
@@ -146,7 +137,6 @@ def main():
         summary.append("## ❌ خطا")
         summary.append(f"```\n{type(e).__name__}: {e}\n```")
     
-    # نمایش در خلاصه
     summary_text = "\n".join(summary)
     print(summary_text)
     
