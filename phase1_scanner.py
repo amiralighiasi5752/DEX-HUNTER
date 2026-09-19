@@ -1,33 +1,30 @@
 import requests
 import os
 import time
+import json
+from datetime import datetime
 
 def get_new_solana_tokens():
-    """مرحله ۱: دریافت توکن‌های تازه‌لیست‌شده سولانا"""
+    """دریافت توکن‌های تازه‌لیست‌شده سولانا"""
     url = "https://api.dexscreener.com/token-profiles/latest/v1"
     response = requests.get(url, timeout=30)
     response.raise_for_status()
     data = response.json()
-    
-    # فیلتر فقط توکن‌های سولانا
-    solana_tokens = [item for item in data if item.get("chainId") == "solana"]
-    return solana_tokens
+    return [item for item in data if item.get("chainId") == "solana"]
 
 def get_token_details(token_address):
-    """مرحله ۲: دریافت داده‌های عمیق برای هر توکن"""
+    """دریافت داده‌های عمیق برای هر توکن"""
     url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
     try:
         response = requests.get(url, timeout=15)
         if response.status_code != 200:
             return None
         data = response.json()
-        
-        # اگر جفتی برای این توکن وجود داشته باشد
         if "pairs" in data and data["pairs"]:
-            # بهترین جفت را بر اساس لیکوییدیتی انتخاب کن
             best_pair = max(data["pairs"], key=lambda p: p.get("liquidity", {}).get("usd", 0) or 0)
             return {
                 "symbol": best_pair.get("baseToken", {}).get("symbol", "?"),
+                "address": token_address,
                 "price": best_pair.get("priceUsd", "N/A"),
                 "liquidity": best_pair.get("liquidity", {}).get("usd", 0) or 0,
                 "volume_24h": best_pair.get("volume", {}).get("h24", 0) or 0,
@@ -40,16 +37,9 @@ def get_token_details(token_address):
     return None
 
 def apply_filters(token_data):
-    """مرحله ۳: اعمال فیلترهای سختگیرانه برای شکار جهش"""
+    """اعمال فیلترهای سختگیرانه"""
     if not token_data:
         return False
-    
-    # فیلترهای پیشنهادی برای شکار جهش ۱۰۰۰٪:
-    # - لیکوییدیتی بین ۱۰ هزار تا ۱ میلیون دلار (توکن‌های کوچک)
-    # - حجم ۲۴ ساعته بالای ۵۰ هزار دلار (فعالیت واقعی)
-    # - سن کمتر از ۷۲ ساعت (توکن‌های تازه)
-    # - تغییر قیمت ۲۴ ساعته مثبت (روند صعودی)
-    
     if not (10000 < token_data["liquidity"] < 1000000):
         return False
     if token_data["volume_24h"] < 50000:
@@ -58,66 +48,105 @@ def apply_filters(token_data):
         return False
     if token_data["price_change_24h"] < 0:
         return False
-    
     return True
+
+def load_history():
+    """بارگذاری تاریخچه از فایل"""
+    if os.path.exists("history.json"):
+        try:
+            with open("history.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_history(history):
+    """ذخیره تاریخچه در فایل"""
+    with open("history.json", "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
 
 def main():
     summary = []
     summary.append("# 🎯 DEX Hunter - Phase 2")
     summary.append("")
-    summary.append("## 📊 خلاصه اجرا")
+    summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
     
     try:
-        # مرحله ۱: دریافت توکن‌های جدید سولانا
+        # بارگذاری تاریخچه
+        history = load_history()
+        known_addresses = {item["address"] for item in history}
+        summary.append(f"- **تاریخچه قبلی:** `{len(history)}` توکن")
+        summary.append("")
+        
+        # مرحله ۱
         print("🔄 دریافت توکن‌های جدید سولانا...")
         new_tokens = get_new_solana_tokens()
         summary.append(f"- **توکن‌های جدید سولانا:** `{len(new_tokens)}`")
-        summary.append("")
         
-        # مرحله ۲: دریافت داده‌های عمیق
-        print(f"🔍 دریافت داده‌های عمیق برای {len(new_tokens)} توکن...")
+        # مرحله ۲
+        print("🔍 دریافت داده‌های عمیق...")
         all_data = []
-        for token in new_tokens[:15]:  # فقط ۱۵ توکن اول برای رعایت محدودیت API
+        for token in new_tokens[:15]:
             address = token.get("tokenAddress")
             if address:
                 details = get_token_details(address)
                 if details:
                     all_data.append(details)
-            time.sleep(0.5)  # تاخیر برای رعایت محدودیت
+            time.sleep(0.5)
         
-        summary.append(f"- **توکن‌های با داده کامل:** `{len(all_data)}`")
-        summary.append("")
-        
-        # مرحله ۳: اعمال فیلترها
-        print("🎯 اعمال فیلترها...")
+        # مرحله ۳
         filtered = [t for t in all_data if apply_filters(t)]
         summary.append(f"- **توکن‌های پس از فیلتر:** `{len(filtered)}`")
         summary.append("")
         
-        # نمایش نتایج
-        if filtered:
-            summary.append("## 🚀 توکن‌های کاندید")
+        # توکن‌های جدید (نه در تاریخچه قبلی)
+        truly_new = [t for t in filtered if t["address"] not in known_addresses]
+        summary.append(f"- **توکن‌های کاملاً جدید:** `{len(truly_new)}`")
+        summary.append("")
+        
+        # نمایش توکن‌های جدید
+        if truly_new:
+            summary.append("## 🚀 توکن‌های جدید کشف‌شده")
             summary.append("")
             summary.append("| نماد | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن |")
             summary.append("|------|------|------------|---------|-----------|-----|")
-            for t in filtered[:10]:
+            for t in truly_new[:10]:
                 summary.append(f"| {t['symbol']} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
-        else:
-            summary.append("## ⚠️ هیچ توکنی فیلترها را رد نکرد")
+        
+        # نمایش تاریخچه (توکن‌های قبلی که هنوز فعال هستند)
+        if filtered:
             summary.append("")
-            summary.append("این طبیعی است چون فیلترها سختگیرانه هستند.")
-            summary.append("در اجراهای بعدی ممکن است توکن‌های بهتری پیدا شوند.")
+            summary.append("## 📜 تاریخچه (توکن‌های فعال)")
+            summary.append("")
+            summary.append("| نماد | قیمت | تغییر ۲۴س | سن |")
+            summary.append("|------|------|-----------|-----|")
+            for t in filtered[:5]:
+                marker = "🆕" if t["address"] not in known_addresses else "📌"
+                summary.append(f"| {marker} {t['symbol']} | ${t['price']} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h |")
+        
+        # به‌روزرسانی تاریخچه (اضافه کردن توکن‌های جدید)
+        for t in filtered:
+            if t["address"] not in known_addresses:
+                t["discovered_at"] = datetime.utcnow().isoformat()
+                t["initial_price"] = t["price"]
+                history.append(t)
+        
+        # نگه‌داشتن فقط ۱۰۰ توکن آخر
+        history = history[-100:]
+        save_history(history)
         
         summary.append("")
+        summary.append(f"📊 **تاریخچه به‌روزرسانی شد:** `{len(history)}` توکن")
+        summary.append("")
         summary.append("---")
-        summary.append("*سلب مسئولیت: این یک ابزار تحلیلی است و سیگنال خرید نیست.*")
+        summary.append("*سلب مسئولیت: این ابزار تحلیلی است و سیگنال خرید نیست.*")
         
     except Exception as e:
         summary.append("## ❌ خطا")
         summary.append(f"```\n{type(e).__name__}: {e}\n```")
     
-    # نمایش در خلاصه ورک‌فلو
+    # نمایش در خلاصه
     summary_text = "\n".join(summary)
     print(summary_text)
     
