@@ -5,14 +5,12 @@ import json
 from datetime import datetime
 
 # ================= تنظیمات =================
-MIN_LIQUIDITY = 10000
-MAX_LIQUIDITY = 5000000
-MIN_VOLUME_24H = 15000
-MAX_AGE_HOURS = 168
-MAX_TOP_HOLDER_PERCENT = 25
+MIN_LIQUIDITY = 8000
+MAX_LIQUIDITY = 3000000
+MIN_VOLUME_24H = 10000
+MAX_AGE_HOURS = 1
 MAX_TOKENS_TO_CHECK = 30
-ALERT_GROWTH_THRESHOLD = 50
-ALERT_BREAKOUT_THRESHOLD = 10
+MAX_GROWTH_AT_DISCOVERY = 150
 
 def send_telegram(message):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -46,6 +44,10 @@ def get_token_details(token_address):
         data = r.json()
         if "pairs" in data and data["pairs"]:
             best = max(data["pairs"], key=lambda p: p.get("liquidity", {}).get("usd", 0) or 0)
+            txns = best.get("txns", {}).get("h24", {})
+            buys = txns.get("buys", 0) or 0
+            sells = txns.get("sells", 0) or 0
+            buy_sell_ratio = buys / sells if sells > 0 else (buys if buys > 0 else 0)
             return {
                 "symbol": best.get("baseToken", {}).get("symbol", "?"),
                 "address": token_address,
@@ -54,106 +56,54 @@ def get_token_details(token_address):
                 "volume_24h": best.get("volume", {}).get("h24", 0) or 0,
                 "price_change_24h": best.get("priceChange", {}).get("h24", 0) or 0,
                 "age_hours": (time.time() * 1000 - (best.get("pairCreatedAt", time.time() * 1000))) / 3600000,
-                "url": best.get("url", "N/A")
+                "url": best.get("url", "N/A"),
+                "buys": buys,
+                "sells": sells,
+                "buy_sell_ratio": buy_sell_ratio
             }
     except Exception:
         return None
     return None
 
-def check_token_security(token_address):
-    try:
-        url = f"https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses={token_address}"
-        r = requests.get(url, timeout=8)
-        if r.status_code != 200:
-            return {"safe": True, "reason": "API Error", "status": "unknown"}
-        data = r.json()
-        result = data.get("result", {}).get(token_address, {})
-        if not result:
-            return {"safe": True, "reason": "No Data", "status": "unknown"}
-        risks = []
-        if result.get("mintable") == "1":
-            risks.append("Mintable")
-        if result.get("freezable") == "1":
-            risks.append("Freezable")
-        top_holder_pct = float(result.get("top_holder_percent", 0) or 0) * 100
-        if top_holder_pct > MAX_TOP_HOLDER_PERCENT:
-            risks.append(f"Top {top_holder_pct:.1f}%")
-        lp_locked = float(result.get("lp_locked_percent", 0) or 0)
-        if lp_locked < 50 and lp_locked > 0:
-            risks.append(f"LP {lp_locked:.0f}%")
-        if risks:
-            return {"safe": False, "reason": ", ".join(risks), "status": "dangerous"}
-        return {"safe": True, "reason": "OK", "status": "safe"}
-    except Exception:
-        return {"safe": True, "reason": "Error", "status": "unknown"}
-
-def calculate_advanced_score(t):
-    score = 0
-    details = []
-    if t["liquidity"] > 0:
-        ratio = t["volume_24h"] / t["liquidity"]
-        if ratio >= 10:
-            score += 30; details.append(f"V/L {ratio:.1f}x (30)")
-        elif ratio >= 5:
-            score += 22; details.append(f"V/L {ratio:.1f}x (22)")
-        elif ratio >= 3:
-            score += 15; details.append(f"V/L {ratio:.1f}x (15)")
-        elif ratio >= 1:
-            score += 8; details.append(f"V/L {ratio:.1f}x (8)")
-    age = t["age_hours"]
-    if age < 6:
-        score += 25; details.append(f"Age {age:.1f}h (25)")
-    elif age < 12:
-        score += 20; details.append(f"Age {age:.1f}h (20)")
-    elif age < 24:
-        score += 15; details.append(f"Age {age:.1f}h (15)")
-    elif age < 48:
-        score += 8; details.append(f"Age {age:.1f}h (8)")
-    else:
-        score += 3; details.append(f"Age {age:.1f}h (3)")
-    liq = t["liquidity"]
-    if liq < 30000:
-        score += 20; details.append(f"Liq ${liq:,.0f} (20)")
-    elif liq < 60000:
-        score += 15; details.append(f"Liq ${liq:,.0f} (15)")
-    elif liq < 150000:
-        score += 10; details.append(f"Liq ${liq:,.0f} (10)")
-    elif liq < 500000:
-        score += 5; details.append(f"Liq ${liq:,.0f} (5)")
-    change = t["price_change_24h"]
-    if change >= 200:
-        score += 15; details.append(f"Chg {change:.0f}% (15)")
-    elif change >= 100:
-        score += 12; details.append(f"Chg {change:.0f}% (12)")
-    elif change >= 50:
-        score += 8; details.append(f"Chg {change:.0f}% (8)")
-    elif change >= 20:
-        score += 5; details.append(f"Chg {change:.0f}% (5)")
-    elif change >= 0:
-        score += 2; details.append(f"Chg {change:.0f}% (2)")
-    vol = t["volume_24h"]
-    if vol >= 500000:
-        score += 10; details.append(f"Vol ${vol:,.0f} (10)")
-    elif vol >= 200000:
-        score += 7; details.append(f"Vol ${vol:,.0f} (7)")
-    elif vol >= 100000:
-        score += 4; details.append(f"Vol ${vol:,.0f} (4)")
-    else:
-        score += 2; details.append(f"Vol ${vol:,.0f} (2)")
-    return score, " | ".join(details)
-
-def apply_filters(t):
+def apply_early_filters(t):
+    """فیلترهای شکار زودهنگام"""
     if not t:
         return False
     if not (MIN_LIQUIDITY < t["liquidity"] < MAX_LIQUIDITY):
         return False
     if t["volume_24h"] < MIN_VOLUME_24H:
         return False
+    # فقط توکن‌های تازه متولد شده
     if t["age_hours"] > MAX_AGE_HOURS:
+        return False
+    # فقط توکن‌هایی که هنوز رشد نکرده‌اند
+    if t["price_change_24h"] > MAX_GROWTH_AT_DISCOVERY:
         return False
     if t["price_change_24h"] < 0:
         return False
+    # نسبت خرید به فروش باید حداقل ۱ باشد
+    if t["buy_sell_ratio"] < 1:
+        return False
     return True
+
+def calculate_score(t):
+    score = 0
+    if t["liquidity"] > 0:
+        ratio = t["volume_24h"] / t["liquidity"]
+        if ratio >= 5: score += 30
+        elif ratio >= 3: score += 20
+        elif ratio >= 1: score += 10
+    age = t["age_hours"]
+    if age < 0.5: score += 30
+    elif age < 1: score += 20
+    elif age < 2: score += 10
+    if t["buy_sell_ratio"] >= 5: score += 25
+    elif t["buy_sell_ratio"] >= 3: score += 20
+    elif t["buy_sell_ratio"] >= 1.5: score += 15
+    change = t["price_change_24h"]
+    if 20 <= change <= 100: score += 15
+    elif 0 < change < 20: score += 10
+    return score
 
 def load_history():
     if os.path.exists("history.json"):
@@ -176,23 +126,18 @@ def safe_float(v):
 
 def main():
     summary = []
-    summary.append("# 🎯 DEX Hunter - Phase 9")
+    summary.append("# 🎯 DEX Hunter - Early Sniper")
     summary.append("")
     summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
     telegram = ["🎯 *DEX Hunter - گزارش جدید*", ""]
-    alerts = []
-    
     try:
         history = load_history()
         known_addresses = {i["address"] for i in history}
-        summary.append(f"- **تاریخچه قبلی:** `{len(history)}` توکن")
         print("دریافت توکن‌های جدید...")
         new_tokens = get_new_solana_tokens()
-        summary.append(f"- **توکن‌های جدید سولانا:** `{len(new_tokens)}`")
+        summary.append(f"- **توکن‌های جدید:** `{len(new_tokens)}`")
         all_data = []
-        rejected_dangerous = 0
-        rejected_filters = 0
         for token in new_tokens[:MAX_TOKENS_TO_CHECK]:
             addr = token.get("tokenAddress")
             if not addr:
@@ -200,47 +145,35 @@ def main():
             d = get_token_details(addr)
             if not d:
                 continue
-            security = check_token_security(addr)
-            if not security["safe"]:
-                rejected_dangerous += 1
+            if not apply_early_filters(d):
                 continue
-            if not apply_filters(d):
-                rejected_filters += 1
-                continue
-            d["score"], d["score_details"] = calculate_advanced_score(d)
-            d["security_status"] = security["status"]
+            d["score"] = calculate_score(d)
             all_data.append(d)
             time.sleep(0.2)
-        summary.append(f"- **رد شده (خطرناک):** `{rejected_dangerous}`")
-        summary.append(f"- **رد شده (فیلتر):** `{rejected_filters}`")
-        summary.append(f"- **نهایی:** `{len(all_data)}`")
-        summary.append("")
+        summary.append(f"- **توکن‌های واجد شرایط:** `{len(all_data)}`")
         truly_new = [t for t in all_data if t["address"] not in known_addresses]
         truly_new.sort(key=lambda x: x["score"], reverse=True)
         if truly_new:
-            summary.append("## 🏆 توکن‌های جدید")
+            summary.append("## 🏆 توکن‌های جدید (شکار زودهنگام)")
             summary.append("")
-            summary.append("| رتبه | نماد | امتیاز | امنیت | قیمت | لیکوییدیتی | حجم ۲۴س | تغییر ۲۴س | سن | لینک |")
-            summary.append("|------|------|--------|-------|------|------------|---------|-----------|-----|------|")
+            summary.append("| رتبه | نماد | امتیاز | قیمت | لیکوییدیتی | Buy/Sell | تغییر ۲۴س | سن | لینک |")
+            summary.append("|------|------|--------|------|------------|----------|-----------|-----|------|")
             for i, t in enumerate(truly_new[:10], 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}"
-                sec_icon = "✅" if t["security_status"] == "safe" else "⚠️"
-                summary.append(f"| {medal} | **{t['symbol']}** | **{t['score']}/100** | {sec_icon} | ${t['price']} | ${t['liquidity']:,.0f} | ${t['volume_24h']:,.0f} | {t['price_change_24h']:.1f}% | {t['age_hours']:.1f}h | [نمودار]({t['url']}) |")
-            telegram.append(f"🚀 *{len(truly_new)} توکن جدید:*")
+                summary.append(f"| {medal} | **{t['symbol']}** | **{t['score']}/100** | ${t['price']} | ${t['liquidity']:,.0f} | {t['buy_sell_ratio']:.1f}x | {t['price_change_24h']:.1f}% | {t['age_hours']:.2f}h | [نمودار]({t['url']}) |")
+            telegram.append(f"🚀 *{len(truly_new)} توکن زودهنگام:*")
             telegram.append("")
             for i, t in enumerate(truly_new[:5], 1):
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-                sec_icon = "✅" if t["security_status"] == "safe" else "⚠️"
-                telegram.append(f"{medal} *{t['symbol']}* — *{t['score']}/100* {sec_icon}")
+                telegram.append(f"{medal} *{t['symbol']}* — *{t['score']}/100*")
                 telegram.append(f"  💰 `${t['price']}` | 💧 `${t['liquidity']:,.0f}`")
-                telegram.append(f"  📈 +{t['price_change_24h']:.0f}% | 📅 {t['age_hours']:.1f}h")
+                telegram.append(f"  📊 Buy/Sell: {t['buy_sell_ratio']:.1f}x | 📅 {t['age_hours']:.2f}h")
                 telegram.append(f"  🔗 [نمودار]({t['url']})")
                 telegram.append("")
         else:
-            summary.append("## ⚠️ هیچ توکنی عبور نکرد")
-            telegram.append("😴 *توکن جدیدی کشف نشد.*")
+            telegram.append("😴 *توکن واجد شرایطی یافت نشد.*")
         
-        print("پیگیری عملکرد توکن‌های قدیمی...")
+        # پیگیری عملکرد
         performance = []
         updated_history = []
         for old in history:
@@ -250,126 +183,41 @@ def main():
             if not current:
                 old["last_status"] = "unavailable"
                 updated_history.append(old)
-                performance.append({
-                    "symbol": old["symbol"], "growth": 0,
-                    "max_growth": old.get("max_growth", 0),
-                    "max_price": old.get("max_price", "?"),
-                    "current_price": "N/A",
-                    "initial_price": old.get("initial_price", "?"),
-                    "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days,
-                    "status": "unavailable",
-                    "url": old.get("url", "N/A")
-                })
                 continue
             initial_price = safe_float(old.get("initial_price", 0))
             current_price = safe_float(current["price"])
             current_growth = ((current_price - initial_price) / initial_price) * 100 if initial_price > 0 else 0
             previous_max_price = safe_float(old.get("max_price", initial_price))
-            previous_max_growth = safe_float(old.get("max_growth", 0))
-            last_growth = safe_float(old.get("last_growth", 0))
-            last_alert_time = old.get("last_alert_time", "")
-            now_str = datetime.utcnow().isoformat()
-            can_alert = True
-            if last_alert_time:
-                try:
-                    last_alert_dt = datetime.fromisoformat(last_alert_time)
-                    if (datetime.utcnow() - last_alert_dt).total_seconds() < 3600:
-                        can_alert = False
-                except Exception:
-                    pass
-            if can_alert:
-                if current_growth >= ALERT_GROWTH_THRESHOLD and last_growth < ALERT_GROWTH_THRESHOLD:
-                    alerts.append({"type": "growth", "symbol": old["symbol"], "growth": current_growth, "price": current["price"], "url": old.get("url", current["url"])})
-                    old["last_alert_time"] = now_str
-                if current_price > previous_max_price * (1 + ALERT_BREAKOUT_THRESHOLD / 100) and previous_max_price > 0:
-                    alerts.append({"type": "breakout", "symbol": old["symbol"], "growth": current_growth, "price": current["price"], "url": old.get("url", current["url"])})
-                    old["last_alert_time"] = now_str
             if current_price > previous_max_price:
                 new_max_price = current_price
                 new_max_growth = ((new_max_price - initial_price) / initial_price) * 100 if initial_price > 0 else 0
             else:
                 new_max_price = previous_max_price
-                new_max_growth = previous_max_growth
-            if "max_price" not in old:
-                old["max_price"] = current_price
-                new_max_price = current_price
-                new_max_growth = current_growth
+                new_max_growth = safe_float(old.get("max_growth", 0))
             old["last_price"] = current["price"]
             old["last_growth"] = current_growth
             old["max_price"] = str(new_max_price)
             old["max_growth"] = new_max_growth
-            old["last_seen"] = now_str
+            old["last_seen"] = datetime.utcnow().isoformat()
             old["last_status"] = "active"
-            performance.append({
-                "symbol": old["symbol"], "growth": current_growth,
-                "max_growth": new_max_growth, "max_price": str(new_max_price),
-                "current_price": current["price"],
-                "initial_price": old.get("initial_price", "?"),
-                "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days,
-                "status": "active",
-                "url": old.get("url", current["url"])
-            })
+            performance.append({"symbol": old["symbol"], "growth": current_growth, "max_growth": new_max_growth, "current_price": current["price"], "initial_price": old.get("initial_price", "?"), "age_days": (datetime.utcnow() - datetime.fromisoformat(old["discovered_at"])).days, "url": old.get("url", current["url"])})
             updated_history.append(old)
         performance.sort(key=lambda x: x["growth"], reverse=True)
-        
-        # === لیست کامل توکن‌ها (در Summary و تلگرام) ===
         if performance:
             summary.append("")
-            summary.append(f"## 📜 لیست کامل توکن‌ها ({len(performance)} توکن)")
+            summary.append(f"## 📜 لیست کامل ({len(performance)} توکن)")
             summary.append("")
-            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | قیمت فعلی | سن (روز) | وضعیت | لینک |")
-            summary.append("|------|-----------|------------|------------|-----------|----------|--------|------|")
+            summary.append("| نماد | رشد فعلی | حداکثر رشد | قیمت اولیه | قیمت فعلی | لینک |")
+            summary.append("|------|-----------|------------|------------|-----------|------|")
             for p in performance:
-                if p["status"] == "unavailable":
-                    summary.append(f"| ⚫ {p['symbol']} | نامشخص | {p['max_growth']:+.1f}% | ${p['initial_price']} | N/A | {p['age_days']} | نامشخص | [نمودار]({p['url']}) |")
-                else:
-                    emoji = "🟢" if p["growth"] > 0 else "🔴"
-                    summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['current_price']} | {p['age_days']} | فعال | [نمودار]({p['url']}) |")
-            
-            # خلاصه آماری
+                emoji = "🟢" if p["growth"] > 0 else "🔴"
+                summary.append(f"| {emoji} {p['symbol']} | {p['growth']:+.1f}% | {p['max_growth']:+.1f}% | ${p['initial_price']} | ${p['current_price']} | [نمودار]({p['url']}) |")
             winners = [p for p in performance if p["max_growth"] >= 100]
-            big_winners = [p for p in performance if p["max_growth"] >= 500]
-            mega_winners = [p for p in performance if p["max_growth"] >= 1000]
-            
+            mega = [p for p in performance if p["max_growth"] >= 1000]
             summary.append("")
-            summary.append("## 📊 آمار کلی")
-            summary.append("")
-            summary.append(f"- **کل توکن‌ها:** `{len(performance)}`")
-            summary.append(f"- **برندگان (حداکثر +۱۰۰٪):** `{len(winners)}`")
-            summary.append(f"- **برندگان بزرگ (حداکثر +۵۰۰٪):** `{len(big_winners)}`")
-            summary.append(f"- **شکارچیان ۱۰۰۰٪:** `{len(mega_winners)}`")
-            
+            summary.append(f"📊 **آمار:** {len(winners)} برنده | {len(mega)} شکارچی ۱۰۰۰٪")
             telegram.append("")
-            telegram.append(f"📜 *لیست کامل ({len(performance)} توکن):*")
-            telegram.append("")
-            for p in performance[:20]:
-                if p["status"] == "unavailable":
-                    telegram.append(f"⚫ *{p['symbol']}*: نامشخص (حذف شده)")
-                else:
-                    emoji = "🟢" if p["growth"] > 0 else "🔴"
-                    telegram.append(f"{emoji} *{p['symbol']}*: {p['growth']:+.0f}% (سقف: {p['max_growth']:+.0f}%)")
-            telegram.append("")
-            telegram.append(f"📊 *آمار:* {len(mega_winners)} شکارچی ۱۰۰۰٪")
-        
-        if alerts:
-            alert_msg = "🚨 *هشدارهای فوری* 🚨\n\n"
-            for a in alerts[:10]:
-                if a["type"] == "growth":
-                    alert_msg += f"🔥 *{a['symbol']}* — رشد *+{a['growth']:.0f}%*\n"
-                elif a["type"] == "breakout":
-                    alert_msg += f"🚀 *{a['symbol']}* — شکست سقف! *+{a['growth']:.0f}%*\n"
-                alert_msg += f"  💰 `${a['price']}`\n"
-                alert_msg += f"  🔗 [نمودار]({a['url']})\n\n"
-            telegram.insert(2, alert_msg)
-            summary.append("")
-            summary.append("## 🚨 هشدارهای فوری")
-            summary.append("")
-            for a in alerts[:10]:
-                if a["type"] == "growth":
-                    summary.append(f"- 🔥 **{a['symbol']}**: رشد **+{a['growth']:.0f}%**")
-                elif a["type"] == "breakout":
-                    summary.append(f"- 🚀 **{a['symbol']}**: شکست سقف **+{a['growth']:.0f}%**")
-        
+            telegram.append(f"📊 *آمار:* {len(mega)} شکارچی ۱۰۰۰٪ از {len(performance)} توکن")
         for t in all_data:
             if t["address"] not in known_addresses:
                 price_str = str(t["price"])
@@ -377,18 +225,13 @@ def main():
                 t["initial_price"] = price_str
                 t["max_price"] = price_str
                 t["max_growth"] = 0
-                t["last_growth"] = 0
-                t["last_alert_time"] = ""
                 t["last_status"] = "active"
                 updated_history.append(t)
         updated_history = updated_history[-200:]
         save_history(updated_history)
-        summary.append("")
-        summary.append(f"📊 **تاریخچه ذخیره‌شده:** `{len(updated_history)}` توکن")
         send_telegram("\n".join(telegram))
     except Exception as e:
-        summary.append("## ❌ خطا")
-        summary.append(f"```\n{type(e).__name__}: {e}\n```")
+        summary.append(f"## ❌ خطا\n```\n{type(e).__name__}: {e}\n```")
         send_telegram(f"❌ *خطا:* `{type(e).__name__}: {e}`")
     txt = "\n".join(summary)
     print(txt)
