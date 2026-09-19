@@ -5,15 +5,14 @@ import json
 from datetime import datetime
 
 # ================= تنظیمات =================
-MIN_LIQUIDITY = 15000
+MIN_LIQUIDITY = 10000
 MAX_LIQUIDITY = 5000000
-MIN_VOLUME_24H = 20000
+MIN_VOLUME_24H = 15000
 MAX_AGE_HOURS = 168
 MAX_TOP_HOLDER_PERCENT = 25
 MAX_TOKENS_TO_CHECK = 30
-ALERT_GROWTH_THRESHOLD = 50     # هشدار رشد ۵۰٪ از قیمت اولیه
-ALERT_BREAKOUT_THRESHOLD = 20   # هشدار شکست سقف ۲۰٪
-ALERT_PUMP_THRESHOLD = 100      # هشدار پامپ ۱۰۰٪ در ۲۴ ساعت
+ALERT_GROWTH_THRESHOLD = 50
+ALERT_BREAKOUT_THRESHOLD = 10
 
 def send_telegram(message):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -41,7 +40,7 @@ def get_new_solana_tokens():
 def get_token_details(token_address):
     url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(url, timeout=10)
         if r.status_code != 200:
             return None
         data = r.json()
@@ -64,7 +63,7 @@ def get_token_details(token_address):
 def check_token_security(token_address):
     try:
         url = f"https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses={token_address}"
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=8)
         if r.status_code != 200:
             return {"safe": True, "reason": "API Error", "status": "unknown"}
         data = r.json()
@@ -177,12 +176,12 @@ def safe_float(v):
 
 def main():
     summary = []
-    summary.append("# 🎯 DEX Hunter - Phase 8 (Alerts)")
+    summary.append("# 🎯 DEX Hunter - Phase 9")
     summary.append("")
     summary.append(f"**زمان اجرا:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     summary.append("")
     telegram = ["🎯 *DEX Hunter - گزارش جدید*", ""]
-    alerts = []  # هشدارهای فوری
+    alerts = []
     
     try:
         history = load_history()
@@ -211,15 +210,13 @@ def main():
             d["score"], d["score_details"] = calculate_advanced_score(d)
             d["security_status"] = security["status"]
             all_data.append(d)
-            time.sleep(0.3)
+            time.sleep(0.2)
         summary.append(f"- **رد شده (خطرناک):** `{rejected_dangerous}`")
-        summary.append(f"- **رد شده (فیلتر بازار):** `{rejected_filters}`")
+        summary.append(f"- **رد شده (فیلتر):** `{rejected_filters}`")
         summary.append(f"- **نهایی:** `{len(all_data)}`")
         summary.append("")
-        
         truly_new = [t for t in all_data if t["address"] not in known_addresses]
         truly_new.sort(key=lambda x: x["score"], reverse=True)
-        
         if truly_new:
             summary.append("## 🏆 توکن‌های جدید")
             summary.append("")
@@ -243,14 +240,13 @@ def main():
             summary.append("## ⚠️ هیچ توکنی عبور نکرد")
             telegram.append("😴 *توکن جدیدی کشف نشد.*")
         
-        # === پیگیری عملکرد و تولید هشدارها ===
         print("پیگیری عملکرد توکن‌های قدیمی...")
         performance = []
         updated_history = []
         for old in history:
             addr = old["address"]
             current = get_token_details(addr)
-            time.sleep(0.3)
+            time.sleep(0.2)
             if not current:
                 old["last_status"] = "unavailable"
                 updated_history.append(old)
@@ -271,27 +267,23 @@ def main():
             previous_max_price = safe_float(old.get("max_price", initial_price))
             previous_max_growth = safe_float(old.get("max_growth", 0))
             last_growth = safe_float(old.get("last_growth", 0))
-            
-            # هشدار ۱: رشد ناگهانی از قیمت اولیه
-            if current_growth >= ALERT_GROWTH_THRESHOLD and last_growth < ALERT_GROWTH_THRESHOLD:
-                alerts.append({
-                    "type": "growth",
-                    "symbol": old["symbol"],
-                    "growth": current_growth,
-                    "price": current["price"],
-                    "url": old.get("url", current["url"])
-                })
-            
-            # هشدار ۲: شکست سقف قبلی
-            if current_price > previous_max_price * (1 + ALERT_BREAKOUT_THRESHOLD / 100):
-                alerts.append({
-                    "type": "breakout",
-                    "symbol": old["symbol"],
-                    "growth": current_growth,
-                    "price": current["price"],
-                    "url": old.get("url", current["url"])
-                })
-            
+            last_alert_time = old.get("last_alert_time", "")
+            now_str = datetime.utcnow().isoformat()
+            can_alert = True
+            if last_alert_time:
+                try:
+                    last_alert_dt = datetime.fromisoformat(last_alert_time)
+                    if (datetime.utcnow() - last_alert_dt).total_seconds() < 3600:
+                        can_alert = False
+                except Exception:
+                    pass
+            if can_alert:
+                if current_growth >= ALERT_GROWTH_THRESHOLD and last_growth < ALERT_GROWTH_THRESHOLD:
+                    alerts.append({"type": "growth", "symbol": old["symbol"], "growth": current_growth, "price": current["price"], "url": old.get("url", current["url"])})
+                    old["last_alert_time"] = now_str
+                if current_price > previous_max_price * (1 + ALERT_BREAKOUT_THRESHOLD / 100) and previous_max_price > 0:
+                    alerts.append({"type": "breakout", "symbol": old["symbol"], "growth": current_growth, "price": current["price"], "url": old.get("url", current["url"])})
+                    old["last_alert_time"] = now_str
             if current_price > previous_max_price:
                 new_max_price = current_price
                 new_max_growth = ((new_max_price - initial_price) / initial_price) * 100 if initial_price > 0 else 0
@@ -306,7 +298,7 @@ def main():
             old["last_growth"] = current_growth
             old["max_price"] = str(new_max_price)
             old["max_growth"] = new_max_growth
-            old["last_seen"] = datetime.utcnow().isoformat()
+            old["last_seen"] = now_str
             old["last_status"] = "active"
             performance.append({
                 "symbol": old["symbol"], "growth": current_growth,
@@ -318,15 +310,13 @@ def main():
                 "url": old.get("url", current["url"])
             })
             updated_history.append(old)
-        
         performance.sort(key=lambda x: x["growth"], reverse=True)
         
-        # نمایش هشدارها در تلگرام (اول از همه)
         if alerts:
             alert_msg = "🚨 *هشدارهای فوری* 🚨\n\n"
             for a in alerts[:10]:
                 if a["type"] == "growth":
-                    alert_msg += f"🔥 *{a['symbol']}* — رشد ناگهانی *+{a['growth']:.0f}%*\n"
+                    alert_msg += f"🔥 *{a['symbol']}* — رشد *+{a['growth']:.0f}%*\n"
                 elif a["type"] == "breakout":
                     alert_msg += f"🚀 *{a['symbol']}* — شکست سقف! *+{a['growth']:.0f}%*\n"
                 alert_msg += f"  💰 `${a['price']}`\n"
@@ -337,7 +327,7 @@ def main():
             summary.append("")
             for a in alerts[:10]:
                 if a["type"] == "growth":
-                    summary.append(f"- 🔥 **{a['symbol']}**: رشد ناگهانی **+{a['growth']:.0f}%**")
+                    summary.append(f"- 🔥 **{a['symbol']}**: رشد **+{a['growth']:.0f}%**")
                 elif a["type"] == "breakout":
                     summary.append(f"- 🚀 **{a['symbol']}**: شکست سقف **+{a['growth']:.0f}%**")
         
@@ -362,6 +352,7 @@ def main():
                 t["max_price"] = price_str
                 t["max_growth"] = 0
                 t["last_growth"] = 0
+                t["last_alert_time"] = ""
                 t["last_status"] = "active"
                 updated_history.append(t)
         updated_history = updated_history[-200:]
